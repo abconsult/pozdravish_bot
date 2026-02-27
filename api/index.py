@@ -163,7 +163,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     style = payload["style"]
     name = payload["name"]
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите пять секунд...")
+    wait_msg = await message.answer("⏳ Рисую открытку, подождите немного...")
 
     occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
     style_hint = STYLE_HINT_MAP.get(style, "")
@@ -184,7 +184,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
     try:
         await message.answer_photo(
-            photo=URLInputFile(protalk_url),
+            photo=protalk_url,
             caption=f"🎉 Готово! Для: {name}\nПовод: {occasion}\nСтиль: {style}"
         )
         left = consume_credit(chat_id)

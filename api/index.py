@@ -209,7 +209,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс новорожденным!"
         elif occasion_text == "8 марта":
             text_to_draw = f"{name},\nс 8 Марта!"
-        elif occasion_text == "завершение":
+        elif occasion_text == "завершение учёбы":
             text_to_draw = f"{name},\nс завершением учёбы!"
         else:
             text_to_draw = f"{name},\nпоздравляю!"

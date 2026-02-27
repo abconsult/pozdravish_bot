@@ -21,7 +21,7 @@ PROTALK_TOKEN        = os.getenv("PROTALK_TOKEN", "")
 PROTALK_FUNCTION_ID  = os.getenv("PROTALK_FUNCTION_ID", "609")
 YUKASSA_TOKEN        = os.getenv("YUKASSA_PROVIDER_TOKEN", "")
 
-# Upstash REST env vars (вы их добавили): UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
+# Upstash REST env vars
 kv = Redis.from_env()
 
 app = FastAPI()
@@ -61,23 +61,49 @@ OCCASION_TEXT_MAP = {
     "Завершение учёбы": "завершение учёбы",
 }
 
-STYLE_HINT_MAP = {
-    "Акварель": "в нежном акварельном стиле",
-    "Масло": "в стиле классической масляной живописи",
-    "Неон": "в ярком неоновом стиле с подсветкой",
-    "Пастель": "в мягком пастельном стиле рисунок мелками",
-    "Винтаж": "в стиле ретро винтажной открытки",
-    "Минимализм": "в современном минималистичном стиле",
+STYLE_PROMPT_MAP = {
+    "Акварель": (
+        "Пустая декоративная рамка, нежная акварельная живопись. Тематика: {occasion}. "
+        "По краям легкие полупрозрачные мазки и брызги краски. "
+        "В самом центре большое абсолютно пустое пространство. "
+        "Без букв, без слов, без текста. Empty center, watercolor frame, pure background, no text."
+    ),
+    "Масло": (
+        "Классическая картина маслом, холст. Тематика: {occasion}. "
+        "Богатая текстура мазков, выразительные цвета по краям картины. "
+        "В центре - однотонный пустой участок фона. "
+        "Строго без надписей и букв. Oil painting frame, blank empty center, no words, zero text."
+    ),
+    "Неон": (
+        "Киберпанк неоновая прямоугольная рамка. Тематика: {occasion}. "
+        "Светящиеся элементы по контуру на тёмном фоне. "
+        "В центре - абсолютно темная пустая зона без элементов. "
+        "Никаких неоновых вывесок, никаких букв и символов. Neon frame, blank dark center, no text."
+    ),
+    "Пастель": (
+        "Рисунок сухой пастелью, мягкие мелки. Тематика: {occasion}. "
+        "Рамка с мягкими переходами цвета по краям. "
+        "В центре полностью пустая светлая бумага для надписи. "
+        "Никакого текста. Pastel drawing frame, blank paper center, no text, no words."
+    ),
+    "Винтаж": (
+        "Старинная винтажная рамка в стиле 19 века. Тематика: {occasion}. "
+        "Пожелтевшая бумага, ретро-орнаменты и флористика только по углам и краям. "
+        "В центре - пустое место. "
+        "Без каллиграфии, без букв. Vintage retro frame, empty blank center, no text, no letters."
+    ),
+    "Минимализм": (
+        "Ультра-минималистичный фон. Тематика: {occasion}. "
+        "Очень мало деталей, много пустого пространства. "
+        "Только пара аккуратных тематических элементов по краям. "
+        "Строго без текста, чистый фон. Minimalist background, lots of negative space, no text."
+    ),
 }
 
-# Непостоянное состояние диалога (повод/стиль) — ок для шага ввода,
-# но «pending» для оплаты держим в Redis.
 user_state = {}  # chat_id -> {"occasion": str|None, "style": str|None}
-
 
 # -------------------- клавиатуры --------------------
 def build_occasion_keyboard() -> ReplyKeyboardMarkup:
-    # Группируем кнопки по 2 штуки в один ряд
     buttons = [
         [KeyboardButton(text=OCCASIONS[0]), KeyboardButton(text=OCCASIONS[1])],
         [KeyboardButton(text=OCCASIONS[2]), KeyboardButton(text=OCCASIONS[3])],
@@ -109,9 +135,7 @@ def build_packages_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for n in (3, 5, 10):
         p = PACKAGES[n]
-        # Выбираем правильное окончание
         word = "открытки" if n == 3 else "открыток"
-        
         buttons.append([InlineKeyboardButton(
             text=f"{n} {word} — {p['rub']} руб.",
             callback_data=f"buy:{n}",
@@ -134,8 +158,6 @@ def get_credits(chat_id: int) -> int:
     return int(val)
 
 def add_credits(chat_id: int, amount: int) -> int:
-    # incrby работает в Redis; в upstash-redis доступен через команда INCRBY как incrby
-    # Если вдруг в вашей версии нет incrby, заменим на get+set.
     try:
         return int(kv.incrby(credits_key(chat_id), amount))
     except Exception:
@@ -170,15 +192,10 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     wait_msg = await message.answer("⏳ Рисую открытку, подождите немного...")
 
     occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
-    style_hint = STYLE_HINT_MAP.get(style, "")
-
-    # 1. Просим нейросеть сгенерировать ТОЛЬКО ФОН (без текста)
-    prompt = (
-        f"Пустая декоративная прямоугольная рамка. Тематика: поздравление на {occasion_text}, "
-        f"{style_hint}. В самом центре - абсолютно пустое однотонное пространство. "
-        f"Только узоры по краям. Без букв, без слов, без текста, без надписей. "
-        f"Empty frame, blank center, pure background, zero text, no words, no letters."
-    )
+    
+    # Берем нужный промпт для стиля (или минимализм по умолчанию)
+    prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
+    prompt = prompt_template.format(occasion=occasion_text)
 
     protalk_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
@@ -190,14 +207,12 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     )
 
     try:
-        # 2. Скачиваем фон
         async with aiohttp.ClientSession() as session:
             async with session.get(protalk_url) as response:
                 if response.status != 200:
                     raise Exception(f"API Error: HTTP {response.status}")
                 image_bytes = await response.read()
 
-        # 3. Накладываем идеальный текст программно
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
         
@@ -208,7 +223,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс днём свадьбы!"
         elif occasion_text == "рождение ребёнка":
             text_to_draw = f"{name},\nс новорожденным!"
-        elif occasion_text == "8 марта":
+        elif occasion_text == "праздник 8 марта":
             text_to_draw = f"{name},\nс 8 Марта!"
         elif occasion_text == "завершение учёбы":
             text_to_draw = f"{name},\nс завершением учёбы!"
@@ -232,7 +247,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         # Указываем цвет текстовой надписи
         text_color = (200, 30, 30) # Красный по умолчанию
-        if occasion_text == "рождение ребёнка":
+        if occasion_text == "рождение ребёнка" or occasion_text == "праздник 8 марта":
             text_color = (219, 112, 147) # Розовый
         elif occasion_text == "свадьбу":
             text_color = (218, 165, 32) # Золотистый
@@ -242,12 +257,11 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         # Рисуем сам текст
         draw.multiline_text((x, y), text_to_draw, font=font, fill=text_color, align="center")
 
-        # Сохраняем готовую картинку с текстом обратно в байты
+        # Сохраняем готовую картинку
         output_buffer = io.BytesIO()
         img.save(output_buffer, format="JPEG", quality=90)
         final_image_bytes = output_buffer.getvalue()
 
-        # 4. Отправляем в Telegram
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
         
         await message.answer_photo(
@@ -272,17 +286,10 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 # -------------------- handlers -------------------- 
 @dp.message(Command("reset"))
 async def reset_credits(message: types.Message):
-    # Замените 123456789 на ваш реальный Telegram ID!
     if message.chat.id != 128247430:
         return
-        
-    # Удаляем запись о кредитах пользователя
     kv.delete(credits_key(message.chat.id))
-    
-    # Бот при следующем запросе сам начислит 3 бесплатные
-    await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатных открытки.")
-
-
+    await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатные открытки.")
 
 
 @dp.message(Command("start"))
@@ -341,9 +348,8 @@ async def buy_package(query: CallbackQuery):
     pkg = PACKAGES[n]
     payload = f"pkg:{n}:{chat_id}"
 
-    await query.answer()  # закрываем «часики»
+    await query.answer() 
     
-    # ИСПРАВЛЕННАЯ СТРОКА: используем bot.send_invoice
     await bot.send_invoice(
         chat_id=chat_id,
         title=pkg["label"],
@@ -361,7 +367,7 @@ async def pre_checkout(q: PreCheckoutQuery):
 @dp.message(F.successful_payment)
 async def paid(message: types.Message):
     chat_id = message.chat.id
-    invoice_payload = message.successful_payment.invoice_payload  # pkg:N:chatid
+    invoice_payload = message.successful_payment.invoice_payload
 
     try:
         prefix, n_str, _ = invoice_payload.split(":")
@@ -379,7 +385,6 @@ async def paid(message: types.Message):
 
     pending = pop_pending(chat_id)
     if pending:
-        # Сразу выполняем «ожидающую» генерацию
         await generate_postcard(chat_id, message, pending)
     else:
         await message.answer("Выберите повод для новой открытки:", reply_markup=build_occasion_keyboard())
@@ -405,7 +410,6 @@ async def name_and_route(message: types.Message):
         await generate_postcard(chat_id, message, payload)
         return
 
-    # Нет кредитов — предлагаем купить пакет
     save_pending(chat_id, payload)
     await message.answer(
         "У вас закончились бесплатные открытки.\n"

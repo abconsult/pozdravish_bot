@@ -1,4 +1,5 @@
 import os
+import json
 import urllib.parse
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
@@ -6,23 +7,31 @@ from aiogram.filters import Command
 from aiogram.types import (
     URLInputFile, Update,
     ReplyKeyboardMarkup, KeyboardButton,
-    LabeledPrice, PreCheckoutQuery
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    LabeledPrice, PreCheckoutQuery, CallbackQuery
 )
 from upstash_redis import Redis
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-PROTALK_BOT_ID     = os.getenv("PROTALK_BOT_ID", "23141")
-PROTALK_TOKEN      = os.getenv("PROTALK_TOKEN", "")
-PROTALK_FUNCTION_ID = os.getenv("PROTALK_FUNCTION_ID", "609")
-YUKASSA_TOKEN      = os.getenv("YUKASSA_PROVIDER_TOKEN", "")
+TELEGRAM_BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+PROTALK_BOT_ID       = os.getenv("PROTALK_BOT_ID", "23141")
+PROTALK_TOKEN        = os.getenv("PROTALK_TOKEN", "")
+PROTALK_FUNCTION_ID  = os.getenv("PROTALK_FUNCTION_ID", "609")
+YUKASSA_TOKEN        = os.getenv("YUKASSA_PROVIDER_TOKEN", "")
 
-# Цена в копейках (99 руб. = 9900)
-BASE_PRICE_KOPECKS = 9900
+# Upstash REST env vars (вы их добавили): UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
+kv = Redis.from_env()
 
 app = FastAPI()
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp  = Dispatcher()
-kv  = Redis.from_env()  # читает UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN
+
+FREE_CREDITS = 3
+
+PACKAGES = {
+    3:  {"rub": 30, "amount": 3000, "label": "Пакет: 3 открытки"},
+    5:  {"rub": 40, "amount": 4000, "label": "Пакет: 5 открыток"},
+    10: {"rub": 50, "amount": 5000, "label": "Пакет: 10 открыток"},
+}
 
 OCCASIONS = [
     "🎂 День рождения",
@@ -41,87 +50,110 @@ STYLES = [
 
 OCCASION_TEXT_MAP = {
     "День рождения": "день рождения",
-    "Свадьба":           "свадьбу",
+    "Свадьба": "свадьбу",
     "Рождение ребёнка": "рождение ребёнка",
-    "8 марта":          "8 марта",
+    "8 марта": "8 марта",
 }
 
 STYLE_HINT_MAP = {
-    "Акварель":              "в нежном акварельном стиле",
-    "Неон":                   "в ярком неоновом стиле с подсветкой",
+    "Акварель": "в нежном акварельном стиле",
+    "Неон": "в ярком неоновом стиле с подсветкой",
     "Пастельный акварельный": "в мягком пастельном акварельном стиле",
-    "Ретро винтаж":          "в стиле ретро винтажной открытки",
-    "Минимализм":             "в современном минималистичном стиле",
+    "Ретро винтаж": "в стиле ретро винтажной открытки",
+    "Минимализм": "в современном минималистичном стиле",
 }
 
-# Состояние в памяти (повод, стиль, имя, флаг оплаты)
-user_state: dict = {}
+# Непостоянное состояние диалога (повод/стиль) — ок для шага ввода,
+# но «pending» для оплаты держим в Redis.
+user_state = {}  # chat_id -> {"occasion": str|None, "style": str|None}
 
 
-# ---------------------------------------------------------------------------
-# Хелперы: клавиатуры
-# ---------------------------------------------------------------------------
+# -------------------- клавиатуры --------------------
 def build_occasion_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=t)] for t in OCCASIONS],
-        resize_keyboard=True, one_time_keyboard=True,
-        input_field_placeholder="Выберите повод"
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выберите повод",
     )
 
 def build_style_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=t)] for t in STYLES],
-        resize_keyboard=True, one_time_keyboard=True,
-        input_field_placeholder="Выберите стиль"
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выберите стиль",
     )
 
-
-# ---------------------------------------------------------------------------
-# Хелперы: скидки + Upstash Redis
-# ---------------------------------------------------------------------------
-def get_discount(count: int) -> tuple[int, str]:
-    """
-    count — число УЖЕ совершённых покупок (без текущей).
-    Возвращает: (процент скидки, описание).
-    """
-    if count == 0:
-        return 0,  ""
-    elif count == 1:
-        return 10, "🎁 Скидка 10% за 2-ю покупку"
-    elif count < 5:
-        return 15, "🌟 Скидка 15% постоянного клиента"
-    else:
-        return 20, "⭐ Скидка 20% VIP-клиента"
-
-def apply_discount(base: int, pct: int) -> int:
-    return int(base * (1 - pct / 100))
-
-def get_purchase_count(chat_id: int) -> int:
-    val = kv.get(f"purchases:{chat_id}")
-    return int(val) if val else 0
-
-def increment_purchase_count(chat_id: int) -> int:
-    return kv.incr(f"purchases:{chat_id}")
+def build_packages_keyboard() -> InlineKeyboardMarkup:
+    buttons = []
+    for n in (3, 5, 10):
+        p = PACKAGES[n]
+        buttons.append([InlineKeyboardButton(
+            text=f"{n} открытки — {p['rub']} ₽",
+            callback_data=f"buy:{n}",
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ---------------------------------------------------------------------------
-# Хелпер: генерация открытки
-# ---------------------------------------------------------------------------
-async def generate_postcard(message: types.Message, state: dict):
-    chat_id     = message.chat.id
-    occasion    = state.get("occasion", "")
-    style       = state.get("style", "")
-    target_name = state.get("name", "")
+# -------------------- Redis helpers --------------------
+def credits_key(chat_id: int) -> str:
+    return f"credits:{chat_id}"
+
+def pending_key(chat_id: int) -> str:
+    return f"pending:{chat_id}"
+
+def get_credits(chat_id: int) -> int:
+    val = kv.get(credits_key(chat_id))
+    if val is None:
+        kv.set(credits_key(chat_id), str(FREE_CREDITS))
+        return FREE_CREDITS
+    return int(val)
+
+def add_credits(chat_id: int, amount: int) -> int:
+    # incrby работает в Redis; в upstash-redis доступен через команда INCRBY как incrby
+    # Если вдруг в вашей версии нет incrby, заменим на get+set.
+    try:
+        return int(kv.incrby(credits_key(chat_id), amount))
+    except Exception:
+        cur = get_credits(chat_id)
+        new = cur + amount
+        kv.set(credits_key(chat_id), str(new))
+        return new
+
+def consume_credit(chat_id: int) -> int:
+    cur = get_credits(chat_id)
+    new = max(cur - 1, 0)
+    kv.set(credits_key(chat_id), str(new))
+    return new
+
+def save_pending(chat_id: int, payload: dict) -> None:
+    kv.set(pending_key(chat_id), json.dumps(payload, ensure_ascii=False))
+
+def pop_pending(chat_id: int) -> dict | None:
+    val = kv.get(pending_key(chat_id))
+    if not val:
+        return None
+    kv.delete(pending_key(chat_id))
+    return json.loads(val)
+
+
+# -------------------- генерация --------------------
+async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
+    occasion = payload["occasion"]
+    style = payload["style"]
+    name = payload["name"]
 
     wait_msg = await message.answer("⏳ Рисую открытку, подождите пару секунд...")
 
     occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
-    style_hint    = STYLE_HINT_MAP.get(style, "")
+    style_hint = STYLE_HINT_MAP.get(style, "")
 
     prompt = (
         f"Красивая поздравительная открытка на {occasion_text}, "
-        f"{style_hint}. Надпись: «{target_name}, поздравляю!»"
+        f"{style_hint}. Надпись: «{name}, поздравляю!»"
     )
+
     protalk_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
         f"?function_id={PROTALK_FUNCTION_ID}"
@@ -134,138 +166,149 @@ async def generate_postcard(message: types.Message, state: dict):
     try:
         await message.answer_photo(
             photo=URLInputFile(protalk_url),
-            caption=(
-                f"🎉 Готово! Открытка для: {target_name}\n\n"
-                f"Повод: {occasion}\n"
-                f"Стиль: {style}"
-            )
+            caption=f"🎉 Готово! Для: {name}\nПовод: {occasion}\nСтиль: {style}"
         )
-        user_state[chat_id] = {"occasion": None, "style": None, "name": None, "paid": False}
+        left = consume_credit(chat_id)
         await message.answer(
-            "Хотите ещё одну открытку? Выберите повод:",
+            f"✅ Списан 1 кредит. Осталось: {left}\n\n"
+            f"Хотите ещё одну? Выберите повод:",
             reply_markup=build_occasion_keyboard()
         )
+        user_state[chat_id] = {"occasion": None, "style": None}
     except Exception as e:
-        await message.answer("❌ Ошибка при генерации. Деньги не списаны повторно.")
+        await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
         print(f"Error: {e}")
     finally:
         await wait_msg.delete()
 
 
-# ---------------------------------------------------------------------------
-# Обработчики Telegram
-# ---------------------------------------------------------------------------
+# -------------------- handlers --------------------
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message):
+async def start(message: types.Message):
     chat_id = message.chat.id
-    user_state[chat_id] = {"occasion": None, "style": None, "name": None, "paid": False}
+    user_state[chat_id] = {"occasion": None, "style": None}
+    credits = get_credits(chat_id)
     await message.answer(
-        "Привет! Я создаю уникальные открытки с ИИ. 🎨\n\n"
-        "💳 Стоимость одной открытки: 99 руб.\n"
-        "🎁 Постоянным покупателям скидки до 20%!\n\n"
-        "Сначала выберите повод:",
+        f"Привет! Я делаю открытки с ИИ.\n\n"
+        f"🎁 У вас {credits} бесплатных/доступных открыток.\n"
+        f"Выберите повод:",
         reply_markup=build_occasion_keyboard()
     )
 
+@dp.message(Command("balance"))
+async def balance(message: types.Message):
+    chat_id = message.chat.id
+    credits = get_credits(chat_id)
+    await message.answer(f"Осталось кредитов: {credits}")
 
-# 1. Выбор повода
 @dp.message(F.text.in_(OCCASIONS))
 async def choose_occasion(message: types.Message):
     chat_id = message.chat.id
-    state = user_state.get(chat_id, {})
-    state.update({"occasion": message.text, "style": None, "name": None, "paid": False})
-    user_state[chat_id] = state
-    await message.answer("Отлично! Теперь выберите стиль:", reply_markup=build_style_keyboard())
+    st = user_state.get(chat_id, {"occasion": None, "style": None})
+    st["occasion"] = message.text
+    st["style"] = None
+    user_state[chat_id] = st
+    await message.answer("Теперь выберите стиль:", reply_markup=build_style_keyboard())
 
-
-# 2. Выбор стиля
 @dp.message(F.text.in_(STYLES))
 async def choose_style(message: types.Message):
     chat_id = message.chat.id
-    state = user_state.get(chat_id, {})
-    if not state.get("occasion"):
-        user_state[chat_id] = {"occasion": None, "style": None, "name": None, "paid": False}
+    st = user_state.get(chat_id, {"occasion": None, "style": None})
+    if not st.get("occasion"):
         await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
         return
-    state.update({"style": message.text, "name": None, "paid": False})
-    user_state[chat_id] = state
-    await message.answer(
-        "Напишите имя человека, для которого делаем открытку:",
-        reply_markup=types.ReplyKeyboardRemove()
-    )
+    st["style"] = message.text
+    user_state[chat_id] = st
+    await message.answer("Введите имя получателя:", reply_markup=types.ReplyKeyboardRemove())
 
-
-# 3. Получаем имя → выставляем счёт ЮКассы
-@dp.message()
-async def ask_payment(message: types.Message):
-    chat_id = message.chat.id
-    state = user_state.get(chat_id, {})
-
-    # Незаполненное состояние
-    if not state.get("occasion") or not state.get("style"):
-        user_state[chat_id] = {"occasion": None, "style": None, "name": None, "paid": False}
-        await message.answer("Давайте начнём заново:", reply_markup=build_occasion_keyboard())
+@dp.callback_query(F.data.startswith("buy:"))
+async def buy_package(query: CallbackQuery):
+    chat_id = query.message.chat.id
+    _, n_str = query.data.split(":")
+    n = int(n_str)
+    if n not in PACKAGES:
+        await query.answer("Неверный пакет", show_alert=True)
         return
 
-    target_name = message.text.strip()
-    if not target_name:
-        await message.answer("Пожалуйста, напишите имя текстом.")
+    pending = kv.get(pending_key(chat_id))
+    if not pending:
+        await query.answer("Нет активного запроса. Начните с /start", show_alert=True)
         return
 
-    state["name"] = target_name
-    user_state[chat_id] = state
+    pkg = PACKAGES[n]
+    payload = f"pkg:{n}:{chat_id}"
 
-    # Считаем покупки и начисляем скидку
-    purchase_count = get_purchase_count(chat_id)
-    discount_pct, discount_label = get_discount(purchase_count)
-    final_price = apply_discount(BASE_PRICE_KOPECKS, discount_pct)
-
-    if discount_pct > 0:
-        price_info = (
-            f"\n\n{discount_label}\n"
-            f"💰 Цена: {final_price // 100} ₽ "
-            f"(вместо {BASE_PRICE_KOPECKS // 100} ₽)"
-        )
-    else:
-        price_info = f"\n\n💰 Цена: {BASE_PRICE_KOPECKS // 100} ₽"
-
-    await message.answer_invoice(
-        title="Поздравительная открытка 🎨",
-        description=(
-            f"Повод: {state['occasion']}\n"
-            f"Стиль: {state['style']}\n"
-            f"Для: {target_name}"
-            f"{price_info}"
-        ),
-        payload=f"postcard_{chat_id}",
+    await query.answer()  # закрыть «часики» у кнопки
+    await query.message.answer_invoice(
+        title=pkg["label"],
+        description=f"Покупка {n} кредитов на генерацию открыток.",
+        payload=payload,
         provider_token=YUKASSA_TOKEN,
         currency="RUB",
-        prices=[LabeledPrice(label="Открытка", amount=final_price)],
+        prices=[LabeledPrice(label=pkg["label"], amount=pkg["amount"])],
+    )
+
+@dp.pre_checkout_query()
+async def pre_checkout(q: PreCheckoutQuery):
+    await q.answer(ok=True)
+
+@dp.message(F.successful_payment)
+async def paid(message: types.Message):
+    chat_id = message.chat.id
+    invoice_payload = message.successful_payment.invoice_payload  # pkg:N:chatid
+
+    try:
+        prefix, n_str, _ = invoice_payload.split(":")
+        if prefix != "pkg":
+            raise ValueError("bad payload")
+        n = int(n_str)
+        if n not in PACKAGES:
+            raise ValueError("unknown package")
+    except Exception:
+        await message.answer("Оплата прошла, но пакет не распознан. Напишите /start.")
+        return
+
+    new_credits = add_credits(chat_id, n)
+    await message.answer(f"✅ Оплата успешна! Начислено {n} кредитов. Теперь доступно: {new_credits}")
+
+    pending = pop_pending(chat_id)
+    if pending:
+        # Сразу выполняем «ожидающую» генерацию
+        await generate_postcard(chat_id, message, pending)
+    else:
+        await message.answer("Выберите повод для новой открытки:", reply_markup=build_occasion_keyboard())
+
+@dp.message()
+async def name_and_route(message: types.Message):
+    chat_id = message.chat.id
+    st = user_state.get(chat_id, {"occasion": None, "style": None})
+
+    if not st.get("occasion") or not st.get("style"):
+        await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
+        return
+
+    name = message.text.strip()
+    if not name:
+        await message.answer("Введите имя текстом.")
+        return
+
+    payload = {"occasion": st["occasion"], "style": st["style"], "name": name}
+
+    credits = get_credits(chat_id)
+    if credits > 0:
+        await generate_postcard(chat_id, message, payload)
+        return
+
+    # Нет кредитов — предлагаем купить пакет
+    save_pending(chat_id, payload)
+    await message.answer(
+        "У вас закончились бесплатные/доступные открытки.\n"
+        "Выберите пакет для продолжения:",
+        reply_markup=build_packages_keyboard()
     )
 
 
-# 4. Telegram спрашивает: готовы принять платёж?
-@dp.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    await query.answer(ok=True)
-
-
-# 5. Успешная оплата → генерация открытки
-@dp.message(F.successful_payment)
-async def payment_done(message: types.Message):
-    chat_id   = message.chat.id
-    state     = user_state.get(chat_id, {})
-    charge_id = message.successful_payment.provider_payment_charge_id
-
-    new_count = increment_purchase_count(chat_id)
-    print(f"✅ Оплата от {chat_id}, транзакция: {charge_id}, всего покупок: {new_count}")
-
-    await generate_postcard(message, state)
-
-
-# ---------------------------------------------------------------------------
-# FastAPI маршруты
-# ---------------------------------------------------------------------------
+# -------------------- FastAPI webhook --------------------
 @app.post("/api/webhook")
 async def telegram_webhook(request: Request):
     try:
@@ -276,7 +319,6 @@ async def telegram_webhook(request: Request):
         print(f"Error processing update: {e}")
     return {"status": "ok"}
 
-
 @app.get("/")
 def root():
-    return {"message": "Telegram Bot API is running on Vercel!"}
+    return {"message": "OK"}

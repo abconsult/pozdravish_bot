@@ -199,12 +199,24 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
         
-        text_to_draw = f"{name},\nпоздравляю!"
+        # Формируем текст в зависимости от повода
+        if occasion_text == "день рождения":
+            text_to_draw = f"С Днём Рождения,\n{name}!"
+        elif occasion_text == "свадьбу":
+            text_to_draw = f"{name},\nс днём свадьбы!"
+        elif occasion_text == "рождение ребёнка":
+            text_to_draw = f"{name},\nс новорожденным!"
+        elif occasion_text == "8 марта":
+            text_to_draw = f"{name},\nс 8 Марта!"
+        else:
+            text_to_draw = f"{name},\nпоздравляю!"
+
         
         # Загружаем шрифт (убедитесь, что загрузили файл шрифта в репозиторий!)
         # Если шрифта нет, PIL использует стандартный (мелкий и некрасивый)
         try:
-            font = ImageFont.truetype("Lobster-Regular.ttf", 60)
+            font_path = os.path.join(os.path.dirname(__file__), "..", "Lobster-Regular.ttf")
+            font = ImageFont.truetype(font_path, 60)
         except IOError:
             font = ImageFont.load_default()
 
@@ -216,6 +228,15 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         
         x = (img.width - text_width) / 2
         y = (img.height - text_height) / 2
+
+        # Указываем цвет текстовой надписи
+            text_color = (200, 30, 30) # Красный по умолчанию
+        if occasion_text == "новорожденным":
+            text_color = (219, 112, 147) # Розовый
+        elif occasion_text == "свадьбы":
+            text_color = (218, 165, 32) # Золотистый
+            
+       draw.multiline_text((x, y), text_to_draw, font=font, fill=text_color, align="center")
 
         # Рисуем тень (для лучшей читаемости)
         draw.multiline_text((x+2, y+2), text_to_draw, font=font, fill=(50, 50, 50), align="center")

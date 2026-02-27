@@ -187,19 +187,19 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         await wait_msg.delete()
 
 
-# -------------------- handlers --------------------
+# -------------------- handlers -------------------- 
 @dp.message(Command("reset"))
 async def reset_credits(message: types.Message):
-    # Временно комментируем проверку ID, чтобы сброс сработал у вас
-    # if message.chat.id != 8092697980:
-    #     return
+    # Замените 123456789 на ваш реальный Telegram ID!
+    if message.chat.id != 128247430:
+        return
         
+    # Удаляем запись о кредитах пользователя
     kv.delete(credits_key(message.chat.id))
     
-    await message.answer(
-        f"🔄 Счетчик сброшен!\n"
-        f"Кстати, ваш реальный chat_id: {message.chat.id}"
-    )
+    # Бот при следующем запросе сам начислит 3 бесплатные
+    await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатных открытки.")
+
 
 
 

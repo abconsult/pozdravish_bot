@@ -264,10 +264,30 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         chosen_font_name = payload.get("font", "Lobster")
         font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
 
-        # Загружаем выбранный шрифт
+
+        # Загружаем выбранный шрифт с базовым размером
+            font_size = 100 # базовый, крупный размер
         try:
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
-            font = ImageFont.truetype(font_path, 60)
+            font = ImageFont.truetype(font_path, font_size)
+            
+            # Проверяем, помещается ли текст (ширина картинки - 1024)
+            # Оставляем отступы по краям по 100px (1024 - 200 = 824px для текста)
+            while True:
+                # Получаем ширину текста
+                bbox = draw.textbbox((0, 0), greeting_text, font=font, align="center")
+                text_width = bbox[2] - bbox[0]
+                
+                if text_width <= 824 or font_size <= 40: # если влезло или уже слишком мелко
+                    break
+                    
+                # Уменьшаем шрифт и пробуем снова
+                font_size -= 5
+                font = ImageFont.truetype(font_path, font_size)
+                
+        except IOError:
+            font = ImageFont.load_default()
+
         except IOError:
             font = ImageFont.load_default()
 

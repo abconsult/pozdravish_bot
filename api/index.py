@@ -210,10 +210,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс 8 Марта!"
         else:
             text_to_draw = f"{name},\nпоздравляю!"
-
         
-        # Загружаем шрифт (убедитесь, что загрузили файл шрифта в репозиторий!)
-        # Если шрифта нет, PIL использует стандартный (мелкий и некрасивый)
+        # Загружаем шрифт
         try:
             font_path = os.path.join(os.path.dirname(__file__), "..", "Lobster-Regular.ttf")
             font = ImageFont.truetype(font_path, 60)
@@ -221,7 +219,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             font = ImageFont.load_default()
 
         # Центрируем текст
-        # В Pillow 10+ используем textbbox
         bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
@@ -230,18 +227,16 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         y = (img.height - text_height) / 2
 
         # Указываем цвет текстовой надписи
-            text_color = (200, 30, 30) # Красный по умолчанию
-        if occasion_text == "новорожденным":
+        text_color = (200, 30, 30) # Красный по умолчанию
+        if occasion_text == "рождение ребёнка":
             text_color = (219, 112, 147) # Розовый
-        elif occasion_text == "свадьбы":
+        elif occasion_text == "свадьбу":
             text_color = (218, 165, 32) # Золотистый
-            
-       draw.multiline_text((x, y), text_to_draw, font=font, fill=text_color, align="center")
 
         # Рисуем тень (для лучшей читаемости)
         draw.multiline_text((x+2, y+2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
         # Рисуем сам текст
-        draw.multiline_text((x, y), text_to_draw, font=font, fill=(200, 30, 30), align="center")
+        draw.multiline_text((x, y), text_to_draw, font=font, fill=text_color, align="center")
 
         # Сохраняем готовую картинку с текстом обратно в байты
         output_buffer = io.BytesIO()

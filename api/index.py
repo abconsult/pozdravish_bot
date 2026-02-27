@@ -91,8 +91,11 @@ def build_packages_keyboard() -> InlineKeyboardMarkup:
     buttons = []
     for n in (3, 5, 10):
         p = PACKAGES[n]
+        # Выбираем правильное окончание
+        word = "открытки" if n == 3 else "открыток"
+        
         buttons.append([InlineKeyboardButton(
-            text=f"{n} открытки — {p['rub']} ₽",
+            text=f"{n} {word} — {p['rub']} руб.",
             callback_data=f"buy:{n}",
         )])
     return InlineKeyboardMarkup(inline_keyboard=buttons)

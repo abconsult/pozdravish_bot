@@ -1,4 +1,5 @@
 import os
+import io
 import json
 import aiohttp
 import urllib.parse
@@ -12,6 +13,7 @@ from aiogram.types import (
     LabeledPrice, PreCheckoutQuery, CallbackQuery, BufferedInputFile
 )
 from upstash_redis import Redis
+from PIL import Image, ImageDraw, ImageFont
 
 TELEGRAM_BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 PROTALK_BOT_ID       = os.getenv("PROTALK_BOT_ID", "23141")
@@ -164,16 +166,17 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     style = payload["style"]
     name = payload["name"]
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите пару секунд...")
+    wait_msg = await message.answer("⏳ Рисую открытку, подождите немного...")
 
     occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
     style_hint = STYLE_HINT_MAP.get(style, "")
 
+    # 1. Просим нейросеть сгенерировать ТОЛЬКО ФОН (без текста)
     prompt = (
-    f"Красивая поздравительная открытка на {occasion_text}, "
-    f"{style_hint}. Крупная и четкая надпись по центру: «{name}, поздравляю!». "
-    f"Строго без другого текста. No other text, clean background, only requested words."
-)
+        f"Красивый фон для поздравительной открытки на {occasion_text}, "
+        f"{style_hint}. Оставьте большое пустое место по центру для текста. "
+        f"NO TEXT, blank center, pure background."
+    )
 
     protalk_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
@@ -185,17 +188,47 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     )
 
     try:
-        # СКАЧИВАЕМ КАРТИНКУ В ПАМЯТЬ БОТА
+        # 2. Скачиваем фон
         async with aiohttp.ClientSession() as session:
             async with session.get(protalk_url) as response:
                 if response.status != 200:
                     raise Exception(f"API Error: HTTP {response.status}")
-                
-                # Читаем байты картинки
                 image_bytes = await response.read()
+
+        # 3. Накладываем идеальный текст программно
+        img = Image.open(io.BytesBytesIO(image_bytes))
+        draw = ImageDraw.Draw(img)
         
-        # Отправляем скачанные байты в Telegram
-        photo = BufferedInputFile(image_bytes, filename="postcard.jpg")
+        text_to_draw = f"{name},\nпоздравляю!"
+        
+        # Загружаем шрифт (убедитесь, что загрузили файл шрифта в репозиторий!)
+        # Если шрифта нет, PIL использует стандартный (мелкий и некрасивый)
+        try:
+            font = ImageFont.truetype("Lobster-Regular.ttf", 60)
+        except IOError:
+            font = ImageFont.load_default()
+
+        # Центрируем текст
+        # В Pillow 10+ используем textbbox
+        bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        x = (img.width - text_width) / 2
+        y = (img.height - text_height) / 2
+
+        # Рисуем тень (для лучшей читаемости)
+        draw.multiline_text((x+2, y+2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
+        # Рисуем сам текст
+        draw.multiline_text((x, y), text_to_draw, font=font, fill=(200, 30, 30), align="center")
+
+        # Сохраняем готовую картинку с текстом обратно в байты
+        output_buffer = io.BytesIO()
+        img.save(output_buffer, format="JPEG", quality=90)
+        final_image_bytes = output_buffer.getvalue()
+
+        # 4. Отправляем в Telegram
+        photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
         
         await message.answer_photo(
             photo=photo,
@@ -209,7 +242,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             reply_markup=build_occasion_keyboard()
         )
         user_state[chat_id] = {"occasion": None, "style": None}
-        
+
     except Exception as e:
         await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
         print(f"Error in generate_postcard: {e}")

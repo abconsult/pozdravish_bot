@@ -43,9 +43,10 @@ OCCASIONS = [
 
 STYLES = [
     "Акварель",
+    "Масло"
     "Неон",
-    "Пастельный",
-    "Ретро винтаж",
+    "Пастель",
+    "Винтаж",
     "Минимализм",
 ]
 
@@ -59,9 +60,10 @@ OCCASION_TEXT_MAP = {
 
 STYLE_HINT_MAP = {
     "Акварель": "в нежном акварельном стиле",
+    "Масло": "в стиле классической масляной живописи",
     "Неон": "в ярком неоновом стиле с подсветкой",
-    "Пастельный": "в мягком пастельном акварельном стиле",
-    "Ретро винтаж": "в стиле ретро винтажной открытки",
+    "Пастель": "в мягком пастельном стиле рисунок мелками",
+    "Винтаж": "в стиле ретро винтажной открытки",
     "Минимализм": "в современном минималистичном стиле",
 }
 
@@ -72,20 +74,32 @@ user_state = {}  # chat_id -> {"occasion": str|None, "style": str|None}
 
 # -------------------- клавиатуры --------------------
 def build_occasion_keyboard() -> ReplyKeyboardMarkup:
+    # Группируем кнопки по 2 штуки в один ряд
+    buttons = [
+        [KeyboardButton(text=OCCASIONS[0]), KeyboardButton(text=OCCASIONS[1])],
+        [KeyboardButton(text=OCCASIONS[2]), KeyboardButton(text=OCCASIONS[3])]
+    ]
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=t)] for t in OCCASIONS],
+        keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
         input_field_placeholder="Выберите повод",
     )
 
+
 def build_style_keyboard() -> ReplyKeyboardMarkup:
+    buttons = [
+        [KeyboardButton(text=STYLES[0]), KeyboardButton(text=STYLES[1])],
+        [KeyboardButton(text=STYLES[2]), KeyboardButton(text=STYLES[3])],
+        [KeyboardButton(text=STYLES[4]), KeyboardButton(text=STYLES[5])] 
+    ]
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=t)] for t in STYLES],
+        keyboard=buttons,
         resize_keyboard=True,
         one_time_keyboard=True,
         input_field_placeholder="Выберите стиль",
     )
+
 
 def build_packages_keyboard() -> InlineKeyboardMarkup:
     buttons = []

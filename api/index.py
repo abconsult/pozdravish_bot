@@ -6,9 +6,9 @@ from aiogram.filters import Command
 from aiogram.types import URLInputFile, Update
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-PROTALK_BOT_ID = os.getenv("PROTALK_BOT_ID", "23141")
+PROTALK_BOT_ID = os.getenv("PROTALK_BOT_ID", "")
 PROTALK_TOKEN = os.getenv("PROTALK_TOKEN", "")
-PROTALK_FUNCTION_ID = os.getenv("PROTALK_FUNCTION_ID", "609")
+PROTALK_FUNCTION_ID = os.getenv("PROTALK_FUNCTION_ID", "")
 
 app = FastAPI()
 bot = Bot(token=TELEGRAM_BOT_TOKEN)

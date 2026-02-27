@@ -175,8 +175,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     # 1. Просим нейросеть сгенерировать ТОЛЬКО ФОН (без текста)
     prompt = (
         f"Тематически оформленный фон для поздравительной открытки на {occasion_text}, "
-        f"{style_hint}. Оставь по центру место для наложения надписи. "
-        f"NO TEXT, blank center, pure detailed background."
+        f"{style_hint}. Обязательно оставь по центру открытки пустой фон для наложения надписи. "
+        f"СТРОГО никаких графических надписей на изображении, только детализированный тематический фон!"
     )
 
     protalk_url = (

@@ -226,6 +226,7 @@ async def buy_package(query: CallbackQuery):
     chat_id = query.message.chat.id
     _, n_str = query.data.split(":")
     n = int(n_str)
+    
     if n not in PACKAGES:
         await query.answer("Неверный пакет", show_alert=True)
         return
@@ -238,8 +239,11 @@ async def buy_package(query: CallbackQuery):
     pkg = PACKAGES[n]
     payload = f"pkg:{n}:{chat_id}"
 
-    await query.answer()  # закрыть «часики» у кнопки
-    await query.message.answer_invoice(
+    await query.answer()  # закрываем «часики»
+    
+    # ИСПРАВЛЕННАЯ СТРОКА: используем bot.send_invoice
+    await bot.send_invoice(
+        chat_id=chat_id,
         title=pkg["label"],
         description=f"Покупка {n} кредитов на генерацию открыток.",
         payload=payload,

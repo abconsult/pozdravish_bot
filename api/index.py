@@ -1,5 +1,6 @@
 import os
 import json
+import aiohttp
 import urllib.parse
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types, F
@@ -8,7 +9,7 @@ from aiogram.types import (
     URLInputFile, Update,
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    LabeledPrice, PreCheckoutQuery, CallbackQuery
+    LabeledPrice, PreCheckoutQuery, CallbackQuery, BufferedInputFile
 )
 from upstash_redis import Redis
 
@@ -163,7 +164,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     style = payload["style"]
     name = payload["name"]
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите немного...")
+    wait_msg = await message.answer("⏳ Рисую открытку, подождите пару секунд...")
 
     occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
     style_hint = STYLE_HINT_MAP.get(style, "")
@@ -183,10 +184,23 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     )
 
     try:
+        # СКАЧИВАЕМ КАРТИНКУ В ПАМЯТЬ БОТА
+        async with aiohttp.ClientSession() as session:
+            async with session.get(protalk_url) as response:
+                if response.status != 200:
+                    raise Exception(f"API Error: HTTP {response.status}")
+                
+                # Читаем байты картинки
+                image_bytes = await response.read()
+        
+        # Отправляем скачанные байты в Telegram
+        photo = BufferedInputFile(image_bytes, filename="postcard.jpg")
+        
         await message.answer_photo(
-            photo=protalk_url,
+            photo=photo,
             caption=f"🎉 Готово! Для: {name}\nПовод: {occasion}\nСтиль: {style}"
         )
+        
         left = consume_credit(chat_id)
         await message.answer(
             f"✅ Списан 1 кредит. Осталось: {left}\n\n"
@@ -194,12 +208,12 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             reply_markup=build_occasion_keyboard()
         )
         user_state[chat_id] = {"occasion": None, "style": None}
+        
     except Exception as e:
         await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
-        print(f"Error: {e}")
+        print(f"Error in generate_postcard: {e}")
     finally:
         await wait_msg.delete()
-
 
 # -------------------- handlers -------------------- 
 @dp.message(Command("reset"))

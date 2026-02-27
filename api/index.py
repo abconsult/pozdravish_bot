@@ -53,6 +53,22 @@ STYLES = [
     "Минимализм",
 ]
 
+FONTS_LIST = [
+    "Lobster",
+    "Caveat",
+    "Pacifico",
+    "Comfortaa",
+]
+
+# Соответствие названия на кнопке реальному имени файла
+FONTS_FILES = {
+    "Lobster": "Lobster-Regular.ttf",
+    "Caveat": "Caveat-Regular.ttf",
+    "Pacifico": "Pacifico-Regular.ttf",
+    "Comfortaa": "Comfortaa-Regular.ttf",
+}
+
+
 OCCASION_TEXT_MAP = {
     "День рождения": "день рождения",
     "Свадьба": "свадьбу",
@@ -118,6 +134,18 @@ def build_occasion_keyboard() -> ReplyKeyboardMarkup:
         input_field_placeholder="Выберите повод",
     )
 
+def build_font_keyboard() -> ReplyKeyboardMarkup:
+    # Делаем кнопки по 2 в ряд
+    buttons = [
+        [KeyboardButton(text=FONTS_LIST[0]), KeyboardButton(text=FONTS_LIST[1])],
+        [KeyboardButton(text=FONTS_LIST[2]), KeyboardButton(text=FONTS_LIST[3])]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_placeholder="Выберите шрифт",
+    )
 
 def build_style_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
@@ -232,9 +260,13 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         else:
             text_to_draw = f"{name},\nпоздравляю!"
         
-        # Загружаем шрифт
+        # Достаем шрифт из payload
+        chosen_font_name = payload.get("font", "Lobster")
+        font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
+
+        # Загружаем выбранный шрифт
         try:
-            font_path = os.path.join(os.path.dirname(__file__), "..", "Lobster-Regular.ttf")
+            font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, 60)
         except IOError:
             font = ImageFont.load_default()
@@ -324,13 +356,28 @@ async def choose_occasion(message: types.Message):
 @dp.message(F.text.in_(STYLES))
 async def choose_style(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None})
+    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
     if not st.get("occasion"):
         await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
         return
     st["style"] = message.text
     user_state[chat_id] = st
-    await message.answer("Введите имя получателя:", reply_markup=types.ReplyKeyboardRemove())
+    # ВМЕСТО ввода имени, теперь просим выбрать шрифт:
+    await message.answer("Отлично! Теперь выберите шрифт надписи:", reply_markup=build_font_keyboard())
+
+@dp.message(F.text.in_(FONTS_LIST))
+async def choose_font(message: types.Message):
+    chat_id = message.chat.id
+    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
+    
+    if not st.get("style"):
+        await message.answer("Сначала выберите стиль:", reply_markup=build_style_keyboard())
+        return
+        
+    st["font"] = message.text
+    user_state[chat_id] = st
+    # Вот ТЕПЕРЬ просим ввести имя  
+    await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.callback_query(F.data.startswith("buy:"))
 async def buy_package(query: CallbackQuery):
@@ -394,9 +441,9 @@ async def paid(message: types.Message):
 @dp.message()
 async def name_and_route(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None})
+    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
 
-    if not st.get("occasion") or not st.get("style"):
+    if not st.get("occasion") or not st.get("style") or not st.get("font"):
         await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
         return
 
@@ -405,7 +452,8 @@ async def name_and_route(message: types.Message):
         await message.answer("Введите имя текстом.")
         return
 
-    payload = {"occasion": st["occasion"], "style": st["style"], "name": name}
+    # Добавляем "font" в payload
+    payload = {"occasion": st["occasion"], "style": st["style"], "font": st["font"], "name": name}
 
     credits = get_credits(chat_id)
     if credits > 0:

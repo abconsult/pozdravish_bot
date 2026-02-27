@@ -170,9 +170,10 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     style_hint = STYLE_HINT_MAP.get(style, "")
 
     prompt = (
-        f"Красивая поздравительная открытка на {occasion_text}, "
-        f"{style_hint}. Надпись: «{name}, поздравляю!»"
-    )
+    f"Красивая поздравительная открытка на {occasion_text}, "
+    f"{style_hint}. Крупная и четкая надпись по центру: «{name}, поздравляю!». "
+    f"Строго без другого текста. No other text, clean background, only requested words."
+)
 
     protalk_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"

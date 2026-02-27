@@ -196,7 +196,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
                 image_bytes = await response.read()
 
         # 3. Накладываем идеальный текст программно
-        img = Image.open(io.BytesBytesIO(image_bytes))
+        img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
         
         text_to_draw = f"{name},\nпоздравляю!"

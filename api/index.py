@@ -57,7 +57,7 @@ OCCASION_TEXT_MAP = {
     "День рождения": "день рождения",
     "Свадьба": "свадьбу",
     "Рождение ребёнка": "рождение ребёнка",
-    "8 марта": "8 марта",
+    "8 марта": "праздник 8 марта",
     "Завершение учёбы": "завершение учёбы",
 }
 
@@ -80,7 +80,8 @@ def build_occasion_keyboard() -> ReplyKeyboardMarkup:
     # Группируем кнопки по 2 штуки в один ряд
     buttons = [
         [KeyboardButton(text=OCCASIONS[0]), KeyboardButton(text=OCCASIONS[1])],
-        [KeyboardButton(text=OCCASIONS[2]), KeyboardButton(text=OCCASIONS[3])]
+        [KeyboardButton(text=OCCASIONS[2]), KeyboardButton(text=OCCASIONS[3])],
+        [KeyboardButton(text=OCCASIONS[4])]
     ]
     return ReplyKeyboardMarkup(
         keyboard=buttons,
@@ -173,9 +174,9 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
     # 1. Просим нейросеть сгенерировать ТОЛЬКО ФОН (без текста)
     prompt = (
-        f"Красивый фон для поздравительной открытки на {occasion_text}, "
-        f"{style_hint}. Оставьте большое пустое место по центру для текста. "
-        f"NO TEXT, blank center, pure background."
+        f"Тематически оформленный фон для поздравительной открытки на {occasion_text}, "
+        f"{style_hint}. Оставь по центру место для наложения надписи. "
+        f"NO TEXT, blank center, pure detailed background."
     )
 
     protalk_url = (
@@ -208,6 +209,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс новорожденным!"
         elif occasion_text == "8 марта":
             text_to_draw = f"{name},\nс 8 Марта!"
+        elif occasion_text == "завершение":
+            text_to_draw = f"{name},\nс завершением учёбы!"
         else:
             text_to_draw = f"{name},\nпоздравляю!"
         

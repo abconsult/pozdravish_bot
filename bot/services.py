@@ -26,37 +26,45 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
     )
 
+    # Use the proper text completion API for ProTalk, not the function runner
+    # Function 609 is only for images.
     protalk_url = (
-        "https://api.pro-talk.ru/api/v1.0/run_function_get"
-        f"?function_id={PROTALK_FUNCTION_ID}"
-        f"&bot_id={PROTALK_BOT_ID}"
-        f"&bot_token={PROTALK_TOKEN}"
-        f"&prompt={urllib.parse.quote(meta_prompt)}"
-        f"&output=text"
+        "https://api.pro-talk.ru/api/v1.0/completion"
     )
+    
+    payload = {
+        "bot_id": PROTALK_BOT_ID,
+        "bot_token": PROTALK_TOKEN,
+        "messages": [
+            {"role": "user", "content": meta_prompt}
+        ]
+    }
 
     fallback = f"С праздником, {name}! 🎉"
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(protalk_url) as resp:
+            async with session.post(protalk_url, json=payload) as resp:
                 if resp.status != 200:
+                    logger.error(f"ProTalk text API returned status: {resp.status}")
                     return fallback
 
-                raw = await resp.text()
+                result = await resp.json()
+                
+                # Extract text based on standard ChatCompletions format
                 try:
-                    result = json.loads(raw)
-                    text = (
-                        (result.get("result") if isinstance(result, dict) else None)
-                        or (result.get("text") if isinstance(result, dict) else None)
-                        or (result.get("response") if isinstance(result, dict) else None)
-                        or (raw if isinstance(result, str) else "")
-                    )
-                except json.JSONDecodeError:
-                    text = raw
+                    if "choices" in result and len(result["choices"]) > 0:
+                        text = result["choices"][0]["message"]["content"]
+                        return text.strip() or fallback
+                    elif "response" in result:
+                        return str(result["response"]).strip() or fallback
+                    else:
+                        logger.error(f"Unexpected response format from ProTalk: {result}")
+                        return fallback
+                except Exception as e:
+                    logger.error(f"Failed to parse ProTalk text response: {e}", exc_info=True)
+                    return fallback
 
-                text = (text or "").strip()
-                return text or fallback
     except Exception as e:
         logger.error(f"Error fetching greeting text: {e}", exc_info=True)
         return fallback

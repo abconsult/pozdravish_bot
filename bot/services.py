@@ -18,6 +18,23 @@ from bot.keyboards import build_occasion_keyboard
 
 logger = logging.getLogger(__name__)
 
+async def fetch_with_retry(url: str, session: aiohttp.ClientSession, retries: int = 3, delay: int = 2) -> aiohttp.ClientResponse:
+    """Wrapper to make HTTP requests with automatic retries on failure."""
+    for attempt in range(retries):
+        try:
+            resp = await session.get(url)
+            if resp.status == 200:
+                return resp
+            logger.warning(f"Attempt {attempt + 1}: Received status {resp.status} for {url}")
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1}: Exception connecting to API: {e}")
+            
+        if attempt < retries - 1:
+            await asyncio.sleep(delay)
+            
+    raise Exception(f"Failed to fetch data after {retries} attempts.")
+
+
 async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
     meta_prompt = (
         f"Напиши короткое красивое поздравление на русском языке. "
@@ -39,26 +56,24 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(protalk_url) as resp:
-                if resp.status != 200:
-                    return fallback
+            resp = await fetch_with_retry(protalk_url, session, retries=3)
+            raw = await resp.text()
+            
+            try:
+                result = json.loads(raw)
+                text = (
+                    (result.get("result") if isinstance(result, dict) else None)
+                    or (result.get("text") if isinstance(result, dict) else None)
+                    or (result.get("response") if isinstance(result, dict) else None)
+                    or (raw if isinstance(result, str) else "")
+                )
+            except json.JSONDecodeError:
+                text = raw
 
-                raw = await resp.text()
-                try:
-                    result = json.loads(raw)
-                    text = (
-                        (result.get("result") if isinstance(result, dict) else None)
-                        or (result.get("text") if isinstance(result, dict) else None)
-                        or (result.get("response") if isinstance(result, dict) else None)
-                        or (raw if isinstance(result, str) else "")
-                    )
-                except json.JSONDecodeError:
-                    text = raw
-
-                text = (text or "").strip()
-                return text or fallback
+            text = (text or "").strip()
+            return text or fallback
     except Exception as e:
-        logger.error(f"Error fetching greeting text: {e}", exc_info=True)
+        logger.error(f"Error fetching greeting text (all retries failed): {e}", exc_info=True)
         return fallback
 
 
@@ -68,7 +83,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     text_mode = payload.get("text_mode", "ai")
     text_input = payload["text_input"]
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите...")
+    wait_msg = await message.answer("⏳ Рисую открытку, это может занять до минуты. Подождите...")
 
     is_custom = occasion.startswith("✏️ ")
     if is_custom:
@@ -91,10 +106,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     try:
         async with aiohttp.ClientSession() as session:
             async def fetch_image():
-                async with session.get(image_url) as resp:
-                    if resp.status != 200:
-                        raise Exception(f"Image API Error: HTTP {resp.status}")
-                    return await resp.read()
+                resp = await fetch_with_retry(image_url, session, retries=3, delay=5)
+                return await resp.read()
 
             if text_mode == "ai":
                 image_bytes, greeting_caption = await asyncio.gather(
@@ -179,6 +192,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
     except Exception as e:
         logger.error(f"Error in generate_postcard: {e}", exc_info=True)
-        await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
+        await message.answer("❌ Сервер генерации временно не отвечает. Пожалуйста, попробуйте чуть позже.")
     finally:
         await wait_msg.delete()

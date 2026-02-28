@@ -1,3 +1,8 @@
+import sys
+import os
+# Добавляем корневую папку проекта в sys.path, чтобы Vercel мог найти модуль bot
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import logging
 from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, Update

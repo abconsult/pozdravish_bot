@@ -1,3 +1,4 @@
+import asyncio
 import os
 import io
 import json
@@ -214,39 +215,97 @@ def pop_pending(chat_id: int) -> dict | None:
 
 
 # -------------------- генерация --------------------
-async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
-    occasion = payload["occasion"]
-    style = payload["style"]
-    name = payload["name"]
+async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
+    """Просим ProTalk написать текст поздравления."""
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите немного...")
-
-    occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
-    
-    # Берем нужный промпт для стиля (или минимализм по умолчанию)
-    prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
-    prompt = prompt_template.format(occasion=occasion_text)
+    meta_prompt = (
+        f"Напиши короткое красивое поздравление на русском языке. "
+        f"Получатель: {name}. Повод: {occasion}. "
+        f"Стиль: тёплый, искренний, 2-3 предложения максимум. "
+        f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
+    )
 
     protalk_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
         f"?function_id={PROTALK_FUNCTION_ID}"
         f"&bot_id={PROTALK_BOT_ID}"
         f"&bot_token={PROTALK_TOKEN}"
-        f"&prompt={urllib.parse.quote(prompt)}"
+        f"&prompt={urllib.parse.quote(meta_prompt)}"
+        f"&output=text"
+    )
+
+    fallback = f"С праздником, {name}! 🎉"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(protalk_url) as resp:
+                if resp.status != 200:
+                    return fallback
+
+                # ProTalk может вернуть JSON или plain text — поддерживаем оба варианта
+                try:
+                    result = await resp.json(content_type=None)
+                    text = (
+                        (result.get("result") if isinstance(result, dict) else None)
+                        or (result.get("text") if isinstance(result, dict) else None)
+                        or (result.get("response") if isinstance(result, dict) else None)
+                        or ""
+                    )
+                except Exception:
+                    text = await resp.text()
+
+                text = (text or "").strip()
+                return text or fallback
+    except Exception:
+        return fallback
+
+
+async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
+    occasion = payload["occasion"]
+    style = payload["style"]
+    name = payload["name"]
+
+    wait_msg = await message.answer("⏳ Рисую открытку и пишу поздравление, подождите...")
+
+    # Определяем occasion_text: поддержка кастомного повода (✏️ ...)
+    is_custom = occasion.startswith("✏️ ")
+    if is_custom:
+        occasion_text = occasion.replace("✏️ ", "").strip()
+    else:
+        occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
+
+    # Формируем промпт для изображения
+    prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
+    image_prompt = prompt_template.format(occasion=occasion_text)
+
+    # URL запроса на генерацию картинки
+    image_url = (
+        "https://api.pro-talk.ru/api/v1.0/run_function_get"
+        f"?function_id={PROTALK_FUNCTION_ID}"
+        f"&bot_id={PROTALK_BOT_ID}"
+        f"&bot_token={PROTALK_TOKEN}"
+        f"&prompt={urllib.parse.quote(image_prompt)}"
         f"&output=image"
     )
 
     try:
+        # ✅ Запускаем запрос картинки и текста ПАРАЛЛЕЛЬНО
         async with aiohttp.ClientSession() as session:
-            async with session.get(protalk_url) as response:
-                if response.status != 200:
-                    raise Exception(f"API Error: HTTP {response.status}")
-                image_bytes = await response.read()
+            async def fetch_image():
+                async with session.get(image_url) as resp:
+                    if resp.status != 200:
+                        raise Exception(f"Image API Error: HTTP {resp.status}")
+                    return await resp.read()
+
+            image_bytes, greeting_caption = await asyncio.gather(
+                fetch_image(),
+                get_greeting_text_from_protalk(name, occasion_text),
+            )
 
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
-        
-        # Формируем текст в зависимости от повода
+
+        # Формируем текст на открытке в зависимости от повода
         if occasion_text == "день рождения":
             text_to_draw = f"С Днём Рождения,\n{name}!"
         elif occasion_text == "свадьбу":
@@ -259,72 +318,68 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс завершением учёбы!"
         else:
             text_to_draw = f"{name},\nпоздравляю!"
-        
-        # Достаем шрифт из payload
+
+        # Достаём шрифт из payload
         chosen_font_name = payload.get("font", "Lobster")
         font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
 
         # Загружаем выбранный шрифт с базовым размером
-        font_size = 100 # базовый, крупный размер
+        font_size = 100
         try:
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, font_size)
-            
-            # Проверяем, помещается ли текст (ширина картинки - 1024)
-            # Оставляем отступы по краям по 100px (1024 - 200 = 824px для текста)
+
+            # Уменьшаем шрифт, пока текст не впишется в 824px по ширине
             while True:
-                # Получаем ширину текста
                 bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
                 text_width = bbox[2] - bbox[0]
-                
-                if text_width <= 824 or font_size <= 40: # если влезло или уже слишком мелко
+                if text_width <= 824 or font_size <= 40:
                     break
-                    
-                # Уменьшаем шрифт и пробуем снова
                 font_size -= 5
                 font = ImageFont.truetype(font_path, font_size)
-                
+
         except IOError:
             font = ImageFont.load_default()
 
-
         # Центрируем текст
         bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
-        text_width = bbox[2] - bbox[0]
+        text_width  = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
-        
-        x = (img.width - text_width) / 2
+        x = (img.width  - text_width)  / 2
         y = (img.height - text_height) / 2
 
-        # Указываем цвет текстовой надписи
-        text_color = (200, 30, 30) # Красный по умолчанию
-        if occasion_text == "рождение ребёнка" or occasion_text == "праздник 8 марта":
-            text_color = (219, 112, 147) # Розовый
+        # Цвет текста зависит от повода
+        text_color = (200, 30, 30)  # красный по умолчанию
+        if occasion_text in ("рождение ребёнка", "8 марта"):
+            text_color = (219, 112, 147)  # розовый
         elif occasion_text == "свадьбу":
-            text_color = (218, 165, 32) # Золотистый
+            text_color = (218, 165, 32)   # золотистый
 
-        # Рисуем тень (для лучшей читаемости)
-        draw.multiline_text((x+2, y+2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
-        # Рисуем сам текст
-        draw.multiline_text((x, y), text_to_draw, font=font, fill=text_color, align="center")
+        # Тень + основной текст
+        draw.multiline_text((x + 2, y + 2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
+        draw.multiline_text((x, y),          text_to_draw, font=font, fill=text_color,  align="center")
 
-        # Сохраняем готовую картинку
+        # Сохраняем результат
         output_buffer = io.BytesIO()
         img.save(output_buffer, format="JPEG", quality=90)
         final_image_bytes = output_buffer.getvalue()
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
-        
+
+        # Используем текст от ProTalk как подпись к открытке
         await message.answer_photo(
             photo=photo,
-            caption=f"🎉 Готово! Для: {name}\nПовод: {occasion}\nСтиль: {style}"
+            caption=(
+                f"{greeting_caption}\n\n"
+                f"🎨 Стиль: {style} | ✍️ Шрифт: {chosen_font_name}"
+            ),
         )
-        
+
         left = consume_credit(chat_id)
         await message.answer(
             f"✅ Списан 1 кредит. Осталось: {left}\n\n"
             f"Хотите ещё одну? Выберите повод:",
-            reply_markup=build_occasion_keyboard()
+            reply_markup=build_occasion_keyboard(),
         )
         user_state[chat_id] = {"occasion": None, "style": None}
 
@@ -334,7 +389,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     finally:
         await wait_msg.delete()
 
-# -------------------- handlers -------------------- 
+
+# -------------------- handlers --------------------
 @dp.message(Command("reset"))
 async def reset_credits(message: types.Message):
     if message.chat.id != 128247430:
@@ -392,22 +448,20 @@ async def choose_style(message: types.Message):
             reply_markup=build_font_keyboard()
         )
     except FileNotFoundError:
-        # Если файл не найден — просто показываем кнопки без превью
         await message.answer("Отлично! Теперь выберите шрифт для надписи:", reply_markup=build_font_keyboard())
-    
+
 
 @dp.message(F.text.in_(FONTS_LIST))
 async def choose_font(message: types.Message):
     chat_id = message.chat.id
     st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
-    
+
     if not st.get("style"):
         await message.answer("Сначала выберите стиль:", reply_markup=build_style_keyboard())
         return
-        
+
     st["font"] = message.text
     user_state[chat_id] = st
-    # Вот ТЕПЕРЬ просим ввести имя  
     await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.callback_query(F.data.startswith("buy:"))
@@ -415,7 +469,7 @@ async def buy_package(query: CallbackQuery):
     chat_id = query.message.chat.id
     _, n_str = query.data.split(":")
     n = int(n_str)
-    
+
     if n not in PACKAGES:
         await query.answer("Неверный пакет", show_alert=True)
         return
@@ -428,8 +482,8 @@ async def buy_package(query: CallbackQuery):
     pkg = PACKAGES[n]
     payload = f"pkg:{n}:{chat_id}"
 
-    await query.answer() 
-    
+    await query.answer()
+
     await bot.send_invoice(
         chat_id=chat_id,
         title=pkg["label"],
@@ -483,7 +537,6 @@ async def name_and_route(message: types.Message):
         await message.answer("Введите имя текстом.")
         return
 
-    # Добавляем "font" в payload
     payload = {"occasion": st["occasion"], "style": st["style"], "font": st["font"], "name": name}
 
     credits = get_credits(chat_id)

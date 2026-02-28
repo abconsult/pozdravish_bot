@@ -120,8 +120,6 @@ STYLE_PROMPT_MAP = {
 }
 
 
-user_state = {}  # chat_id -> {"occasion": str|None, "style": str|None}
-
 # -------------------- клавиатуры --------------------
 def build_occasion_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
@@ -176,6 +174,21 @@ def build_packages_keyboard() -> InlineKeyboardMarkup:
 
 
 # -------------------- Redis helpers --------------------
+def state_key(chat_id: int) -> str:
+    return f"state:{chat_id}"
+
+def get_user_state(chat_id: int) -> dict:
+    val = kv.get(state_key(chat_id))
+    if val:
+        try:
+            return json.loads(val) if isinstance(val, str) else val
+        except json.JSONDecodeError:
+            pass
+    return {"occasion": None, "style": None, "font": None}
+
+def set_user_state(chat_id: int, state: dict) -> None:
+    kv.set(state_key(chat_id), json.dumps(state, ensure_ascii=False))
+
 def credits_key(chat_id: int) -> str:
     return f"credits:{chat_id}"
 
@@ -212,7 +225,7 @@ def pop_pending(chat_id: int) -> dict | None:
     if not val:
         return None
     kv.delete(pending_key(chat_id))
-    return json.loads(val)
+    return json.loads(val) if isinstance(val, str) else val
 
 
 # -------------------- генерация --------------------
@@ -382,7 +395,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             f"Хотите ещё одну? Выберите повод:",
             reply_markup=build_occasion_keyboard(),
         )
-        user_state[chat_id] = {"occasion": None, "style": None}
+        set_user_state(chat_id, {"occasion": None, "style": None, "font": None})
 
     except Exception as e:
         await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
@@ -403,7 +416,7 @@ async def reset_credits(message: types.Message):
 @dp.message(Command("start"))
 async def start(message: types.Message):
     chat_id = message.chat.id
-    user_state[chat_id] = {"occasion": None, "style": None}
+    set_user_state(chat_id, {"occasion": None, "style": None, "font": None})
     credits = get_credits(chat_id)
     await message.answer(
         f"Привет! Я делаю поздравления с ИИ 😃🙌🏻\n\n"
@@ -421,22 +434,21 @@ async def balance(message: types.Message):
 @dp.message(F.text.in_(OCCASIONS))
 async def choose_occasion(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None})
+    st = get_user_state(chat_id)
     st["occasion"] = message.text
     st["style"] = None
-    user_state[chat_id] = st
+    set_user_state(chat_id, st)
     await message.answer("Теперь выберите стиль:", reply_markup=build_style_keyboard())
 
 @dp.message(F.text.in_(STYLES))
-@dp.message(F.text.in_(STYLES))
 async def choose_style(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
+    st = get_user_state(chat_id)
     if not st.get("occasion"):
         await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
         return
     st["style"] = message.text
-    user_state[chat_id] = st
+    set_user_state(chat_id, st)
 
     # Отправляем превью шрифтов картинкой
     preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts_preview.jpg")
@@ -455,14 +467,14 @@ async def choose_style(message: types.Message):
 @dp.message(F.text.in_(FONTS_LIST))
 async def choose_font(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
+    st = get_user_state(chat_id)
 
     if not st.get("style"):
         await message.answer("Сначала выберите стиль:", reply_markup=build_style_keyboard())
         return
 
     st["font"] = message.text
-    user_state[chat_id] = st
+    set_user_state(chat_id, st)
     await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
 
 @dp.callback_query(F.data.startswith("buy:"))
@@ -527,7 +539,7 @@ async def paid(message: types.Message):
 @dp.message()
 async def name_and_route(message: types.Message):
     chat_id = message.chat.id
-    st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
+    st = get_user_state(chat_id)
 
     if not st.get("occasion") or not st.get("style") or not st.get("font"):
         await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())

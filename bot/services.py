@@ -50,7 +50,6 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
                 data = await resp.json()
                 logger.info(f"ProTalk text generation response: {json.dumps(data, ensure_ascii=False)}")
 
-                # The ProTalk /ask API returns the result in the 'done' field
                 text = data.get("done", "")
                 if text:
                     return text.strip()
@@ -66,7 +65,6 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
 def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> str:
     """Wrap text to fit within max_width based on the given font."""
     lines = []
-    # Split by explicit newlines first
     for paragraph in text.split('\n'):
         words = paragraph.split()
         if not words:
@@ -75,7 +73,6 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Ima
             
         current_line = words[0]
         for word in words[1:]:
-            # Check if adding the next word exceeds width
             test_line = current_line + " " + word
             bbox = draw.textbbox((0, 0), test_line, font=font)
             width = bbox[2] - bbox[0]
@@ -88,6 +85,22 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Ima
         lines.append(current_line)
         
     return '\n'.join(lines)
+
+
+def extract_addressee(text: str) -> str:
+    """Extract addressee name/address from custom greeting text (everything before first comma/punct)."""
+    t = (text or "").strip()
+    if not t:
+        return "Друзья"
+    for sep in [",", "!", "."]:
+        if sep in t:
+            part = t.split(sep)[0].strip()
+            if part:
+                words = part.split()
+                return " ".join(words[:3])
+    words = t.split()
+    return " ".join(words[:3]) if words else "Друзья"
+
 
 async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
     occasion = payload["occasion"]
@@ -114,7 +127,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
     image_prompt = prompt_template.format(occasion=occasion_text)
-    image_prompt += " Strictly no text, no words, no letters, blank center."
+    image_prompt += " Strictly no text, no words, no letters, no watermark, no logo, blank center."
 
     image_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
@@ -136,39 +149,27 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
                     return await resp.read()
 
             if text_mode == "ai":
-                image_bytes, greeting_caption = await asyncio.gather(
+                image_bytes, caption_text = await asyncio.gather(
                     fetch_image(),
                     get_greeting_text_from_protalk(text_input, occasion_text),
                 )
             else:
                 image_bytes = await fetch_image()
-                greeting_caption = "Ваша открытка готова! ✨"
+                caption_text = text_input.strip()[:1024]
 
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
 
+        # Always draw only "{addressee}, поздравляю!" on the image
         if text_mode == "ai":
-            if is_custom:
-                text_to_draw = f"{text_input},\nс праздником: {occasion_text}!"
-            elif occasion_text == "день рождения":
-                text_to_draw = f"С Днём Рождения,\n{text_input}!"
-            elif occasion_text == "свадьбу":
-                text_to_draw = f"{text_input},\nс днём свадьбы!"
-            elif occasion_text == "рождение ребёнка":
-                text_to_draw = f"{text_input},\nс новорожденным!"
-            elif occasion_text == "8 марта":
-                text_to_draw = f"{text_input},\nс 8 Марта!"
-            elif occasion_text == "завершение учёбы":
-                text_to_draw = f"{text_input},\nс завершением учёбы!"
-            else:
-                text_to_draw = f"{text_input},\nпоздравляю!"
+            addressee = text_input
         else:
-            text_to_draw = text_input
+            addressee = extract_addressee(text_input)
+        text_to_draw = f"{addressee}, поздравляю!"
 
         chosen_font_name = payload.get("font", "Lobster")
         font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
 
-        # Max text area (e.g. 80% of image width, 80% of image height)
         max_text_width = int(img.width * 0.8)
         max_text_height = int(img.height * 0.8)
 
@@ -177,7 +178,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, font_size)
 
-            # First try wrapping the text at this font size
             wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
 
             while True:
@@ -188,7 +188,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
                 if (text_width <= max_text_width and text_height <= max_text_height) or font_size <= 20:
                     break
                 
-                # Reduce font size and re-wrap
                 font_size -= 5
                 font = ImageFont.truetype(font_path, font_size)
                 wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
@@ -212,7 +211,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         elif occasion_text == "свадьбу":
             text_color = (218, 165, 32)
         elif is_custom:
-             text_color = (50, 100, 200) # Blue-ish for custom occasions
+             text_color = (50, 100, 200)
 
         draw.multiline_text((x + 2, y + 2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
         draw.multiline_text((x, y),          text_to_draw, font=font, fill=text_color,  align="center")
@@ -223,7 +222,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
 
-        await message.answer_photo(photo=photo, caption=f"{greeting_caption}")
+        await message.answer_photo(photo=photo, caption=caption_text)
 
         left = consume_credit(chat_id)
         record_generation()

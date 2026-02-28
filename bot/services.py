@@ -19,6 +19,7 @@ from bot.keyboards import build_occasion_keyboard
 
 logger = logging.getLogger(__name__)
 
+
 async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
     meta_prompt = (
         f"Напиши короткое красивое поздравление на русском языке. "
@@ -87,19 +88,22 @@ def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: Ima
     return '\n'.join(lines)
 
 
-def extract_addressee(text: str) -> str:
-    """Extract addressee name/address from custom greeting text (everything before first comma/punct)."""
-    t = (text or "").strip()
-    if not t:
-        return "Друзья"
-    for sep in [",", "!", "."]:
-        if sep in t:
-            part = t.split(sep)[0].strip()
-            if part:
-                words = part.split()
-                return " ".join(words[:3])
-    words = t.split()
-    return " ".join(words[:3]) if words else "Друзья"
+def format_image_text(addressee: str, occasion_text: str, is_custom: bool) -> str:
+    """Format the short greeting for the image based on occasion."""
+    if is_custom:
+        return f"{addressee}, поздравляю!"
+    elif occasion_text == "день рождения":
+        return f"{addressee}, с Днём Рождения!"
+    elif occasion_text == "свадьбу":
+        return f"{addressee}, с Днём Свадьбы!"
+    elif occasion_text == "рождение ребёнка":
+        return f"{addressee}, с новорожденным!"
+    elif occasion_text == "8 марта":
+        return f"{addressee}, с днём 8 марта!"
+    elif occasion_text == "завершение учёбы":
+        return f"{addressee}, с выпускным!"
+    else:
+        return f"{addressee}, поздравляю!"
 
 
 async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
@@ -107,6 +111,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     style = payload["style"]
     text_mode = payload.get("text_mode", "ai")
     text_input = payload["text_input"]
+    addressee = payload.get("addressee") or text_input
 
     wait_msg = await message.answer("⏳ Рисую открытку, подождите...")
 
@@ -120,7 +125,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
                  if key in occasion or occasion in key or key.split(" ")[-1] in occasion:
                      occasion_text = val
                      break
-
         if not occasion_text:
              logger.error(f"Failed to map occasion exact match: '{occasion}'. Using default.")
              occasion_text = "праздник"
@@ -160,12 +164,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
 
-        # Always draw only "{addressee}, поздравляю!" on the image
-        if text_mode == "ai":
-            addressee = text_input
-        else:
-            addressee = extract_addressee(text_input)
-        text_to_draw = f"{addressee}, поздравляю!"
+        # Short occasion-based greeting on the image
+        text_to_draw = format_image_text(addressee, occasion_text, is_custom)
 
         chosen_font_name = payload.get("font", "Lobster")
         font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
@@ -211,7 +211,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         elif occasion_text == "свадьбу":
             text_color = (218, 165, 32)
         elif is_custom:
-             text_color = (50, 100, 200)
+            text_color = (50, 100, 200)
 
         draw.multiline_text((x + 2, y + 2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
         draw.multiline_text((x, y),          text_to_draw, font=font, fill=text_color,  align="center")
@@ -232,7 +232,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             f"Хотите ещё одну? Выберите повод:",
             reply_markup=build_occasion_keyboard(),
         )
-        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
+        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None, "addressee": None})
 
     except Exception as e:
         logger.error(f"Error in generate_postcard: {e}", exc_info=True)

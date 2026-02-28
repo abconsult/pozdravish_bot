@@ -101,7 +101,9 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
     # Добавляем жесткие инструкции, чтобы ИИ не генерировал случайные символы на фоне открытки
     image_prompt = prompt_template.format(occasion=occasion_text)
-    image_prompt += ". ВАЖНО: На картинке не должно быть никакого текста, букв, надписей, слов или водяных знаков. Оставь в центре картинки фон чистым."
+    # Removed prompt injection ". ВАЖНО: На картинке не должно быть никакого текста..." 
+    # because AI started literally writing "подарки на свадьбу" ignoring the context.
+    image_prompt += " Strictly no text, no words, no letters, blank center."
 
     image_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"

@@ -2,15 +2,16 @@ import os
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandStart
 from aiogram.types import LabeledPrice, PreCheckoutQuery, CallbackQuery, BufferedInputFile
+from aiogram.utils.deep_linking import create_start_link
 
 from bot.config import ADMIN_ID, OCCASIONS, STYLES, FONTS_LIST, PACKAGES, YUKASSA_TOKEN
 from bot.database import (
     kv, credits_key, get_credits, set_user_state, get_user_state,
     add_credits, pending_key, pop_pending, save_pending,
     record_new_user, get_total_users, get_total_generations, 
-    get_total_revenue, record_payment, get_all_users
+    get_total_revenue, record_payment, get_all_users, is_user_exists
 )
 from bot.keyboards import (
     build_occasion_keyboard, build_style_keyboard,
@@ -19,6 +20,10 @@ from bot.keyboards import (
 from bot.services import generate_postcard
 
 logger = logging.getLogger(__name__)
+
+# Referral config
+REFERRAL_BONUS_INVITER = 2
+REFERRAL_BONUS_INVITEE = 1
 
 def register_handlers(dp: Dispatcher, bot: Bot):
     
@@ -81,27 +86,71 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     # ---------------- USER FLOW ----------------
 
-    @dp.message(Command("start"))
+    @dp.message(CommandStart())
     async def start(message: types.Message):
         chat_id = message.chat.id
         
-        # Admin Metrics
-        record_new_user(chat_id)
+        # Deep-link referral processing (e.g., /start 123456789)
+        args = message.text.split()
+        referral_text = ""
+        
+        if not is_user_exists(chat_id):
+            record_new_user(chat_id)
+            
+            # If user came from a referral link and they are strictly new
+            if len(args) > 1 and args[1].isdigit():
+                inviter_id = int(args[1])
+                if inviter_id != chat_id:
+                    # Give bonus to the new user
+                    add_credits(chat_id, REFERRAL_BONUS_INVITEE)
+                    referral_text = f"🎉 <b>Вы перешли по приглашению!</b>\nВам начислен дополнительный <b>+{REFERRAL_BONUS_INVITEE} кредит</b>.\n\n"
+                    
+                    # Give bonus to the inviter
+                    try:
+                        add_credits(inviter_id, REFERRAL_BONUS_INVITER)
+                        await bot.send_message(
+                            inviter_id, 
+                            f"🎁 <b>По вашей ссылке зарегистрировался друг!</b>\nВам начислено <b>+{REFERRAL_BONUS_INVITER} кредита</b>.", 
+                            parse_mode="HTML"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to notify inviter {inviter_id}: {e}")
         
         set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
         credits = get_credits(chat_id)
-        await message.answer(
+        
+        welcome_text = (
             f"Привет! Я делаю поздравления с ИИ 😃🙌🏻\n\n"
-            f"🎁 Вам доступно {credits} бесплатных открыток.\n"
-            f"Выберите повод:",
-            reply_markup=build_occasion_keyboard()
+            f"{referral_text}"
+            f"🎁 Вам доступно <b>{credits}</b> бесплатных открыток.\n"
+            f"Выберите повод:"
         )
+        await message.answer(welcome_text, reply_markup=build_occasion_keyboard(), parse_mode="HTML")
+
+    @dp.message(Command("referral"))
+    async def get_referral_link(message: types.Message):
+        chat_id = message.chat.id
+        # Creates a deep link like: t.me/bot_name?start=123456789
+        link = await create_start_link(bot, str(chat_id), encode=False)
+        
+        text = (
+            f"🤝 <b>Приглашайте друзей и получайте бесплатные открытки!</b>\n\n"
+            f"За каждого нового друга, который запустит бота по вашей ссылке, "
+            f"вы получите <b>+{REFERRAL_BONUS_INVITER} кредита</b>, "
+            f"а ваш друг — <b>+{REFERRAL_BONUS_INVITEE} бонусный кредит</b>.\n\n"
+            f"Ваша ссылка для приглашений:\n{link}"
+        )
+        await message.answer(text, parse_mode="HTML")
 
     @dp.message(Command("balance"))
     async def balance(message: types.Message):
         chat_id = message.chat.id
         credits = get_credits(chat_id)
-        await message.answer(f"Осталось кредитов: {credits}")
+        await message.answer(
+            f"Осталось кредитов: <b>{credits}</b>\n\n"
+            f"💡 Получить бесплатные кредиты можно пригласив друзей через команду /referral",
+            parse_mode="HTML"
+        )
 
     @dp.message(F.text.in_(OCCASIONS))
     async def choose_occasion(message: types.Message):
@@ -259,6 +308,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         save_pending(chat_id, payload)
         await message.answer(
             "У вас закончились бесплатные открытки.\n"
-            "Выберите пакет для продолжения:",
+            "Выберите пакет для продолжения или пригласите друга через /referral:",
             reply_markup=build_packages_keyboard()
         )

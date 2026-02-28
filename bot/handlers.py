@@ -160,7 +160,19 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     @dp.message(F.text.in_(OCCASIONS))
     async def choose_occasion(message: types.Message):
         chat_id = message.chat.id
-        # Принудительная очистка старого состояния перед записью нового повода
+        
+        if message.text == "✏️ Свой повод":
+            # For custom occasion, we set a flag and wait for user to type it
+            st = {
+                "occasion": "WAITING_CUSTOM_OCCASION",
+                "style": None,
+                "font": None,
+                "text_mode": None
+            }
+            set_user_state(chat_id, st)
+            await message.answer("Пожалуйста, напишите свой повод (например: День программиста, Годовщина знакомства):", reply_markup=types.ReplyKeyboardRemove())
+            return
+
         st = {
             "occasion": message.text,
             "style": None,
@@ -174,7 +186,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def choose_style(message: types.Message):
         chat_id = message.chat.id
         st = get_user_state(chat_id)
-        if not st.get("occasion"):
+        if not st.get("occasion") or st.get("occasion") == "WAITING_CUSTOM_OCCASION":
             await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
             return
             
@@ -295,16 +307,25 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def text_input_and_route(message: types.Message):
         chat_id = message.chat.id
         st = get_user_state(chat_id)
-
-        if not st.get("occasion") or not st.get("style") or not st.get("font") or not st.get("text_mode"):
-            await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
-            return
-
+        
         text_input = message.text.strip()
         if not text_input:
             await message.answer("Пожалуйста, отправьте текст.")
             return
+            
+        # 1. Check if we are waiting for a custom occasion text
+        if st.get("occasion") == "WAITING_CUSTOM_OCCASION":
+            st["occasion"] = f"✏️ {text_input}"
+            set_user_state(chat_id, st)
+            await message.answer("Отлично! Теперь выберите стиль:", reply_markup=build_style_keyboard())
+            return
 
+        # 2. Check if we are missing state
+        if not st.get("occasion") or not st.get("style") or not st.get("font") or not st.get("text_mode"):
+            await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
+            return
+
+        # 3. Final text input -> generate postcard
         payload = {
             "occasion": st["occasion"], 
             "style": st["style"], 

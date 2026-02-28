@@ -84,14 +84,10 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     if is_custom:
         occasion_text = occasion.replace("✏️ ", "").strip()
     else:
-        # FIX: The payload occasion string from DB actually matches OCCASIONS list exactly (e.g. '🌸 8 марта')
-        # So we should strip the first 2 characters (the emoji and the space) to get the clean text.
-        occasion_clean = occasion[2:].strip() if len(occasion) > 2 else occasion
-        # Then map it. If not found, log it and fallback to "праздник".
-        occasion_text = OCCASION_TEXT_MAP.get(occasion_clean)
-        if not occasion_text:
-             logger.error(f"Failed to map occasion: '{occasion_clean}' from original '{occasion}'. Using default.")
-             occasion_text = "праздник"
+        # No string slicing or replacing. Just a direct exact match with the key in config.py
+        occasion_text = OCCASION_TEXT_MAP.get(occasion, "праздник")
+        if occasion_text == "праздник":
+             logger.error(f"Failed to map occasion exact match: '{occasion}'. Using default.")
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
     # Добавляем жесткие инструкции, чтобы ИИ не генерировал случайные символы на фоне открытки

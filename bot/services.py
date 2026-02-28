@@ -63,6 +63,32 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         return fallback
 
 
+def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> str:
+    """Wrap text to fit within max_width based on the given font."""
+    lines = []
+    # Split by explicit newlines first
+    for paragraph in text.split('\n'):
+        words = paragraph.split()
+        if not words:
+            lines.append("")
+            continue
+            
+        current_line = words[0]
+        for word in words[1:]:
+            # Check if adding the next word exceeds width
+            test_line = current_line + " " + word
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            width = bbox[2] - bbox[0]
+            
+            if width <= max_width:
+                current_line = test_line
+            else:
+                lines.append(current_line)
+                current_line = word
+        lines.append(current_line)
+        
+    return '\n'.join(lines)
+
 async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
     occasion = payload["occasion"]
     style = payload["style"]
@@ -122,7 +148,9 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         draw = ImageDraw.Draw(img)
 
         if text_mode == "ai":
-            if occasion_text == "день рождения":
+            if is_custom:
+                text_to_draw = f"{text_input},\nс праздником: {occasion_text}!"
+            elif occasion_text == "день рождения":
                 text_to_draw = f"С Днём Рождения,\n{text_input}!"
             elif occasion_text == "свадьбу":
                 text_to_draw = f"{text_input},\nс днём свадьбы!"
@@ -140,24 +168,39 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         chosen_font_name = payload.get("font", "Lobster")
         font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
 
+        # Max text area (e.g. 80% of image width, 80% of image height)
+        max_text_width = int(img.width * 0.8)
+        max_text_height = int(img.height * 0.8)
+
         font_size = 100
         try:
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, font_size)
 
+            # First try wrapping the text at this font size
+            wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
+
             while True:
-                bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
+                bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
                 text_width = bbox[2] - bbox[0]
                 text_height = bbox[3] - bbox[1]
-                if (text_width <= 824 and text_height <= 800) or font_size <= 30:
+                
+                if (text_width <= max_text_width and text_height <= max_text_height) or font_size <= 20:
                     break
+                
+                # Reduce font size and re-wrap
                 font_size -= 5
                 font = ImageFont.truetype(font_path, font_size)
+                wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
+                
+            text_to_draw = wrapped_text
 
         except IOError:
             font = ImageFont.load_default()
+            wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
+            text_to_draw = wrapped_text
 
-        bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
+        bbox = draw.multiline_textbbox((0, 0), text_to_draw, font=font, align="center")
         text_width  = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
         x = (img.width  - text_width)  / 2
@@ -168,6 +211,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_color = (219, 112, 147)
         elif occasion_text == "свадьбу":
             text_color = (218, 165, 32)
+        elif is_custom:
+             text_color = (50, 100, 200) # Blue-ish for custom occasions
 
         draw.multiline_text((x + 2, y + 2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
         draw.multiline_text((x, y),          text_to_draw, font=font, fill=text_color,  align="center")

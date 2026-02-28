@@ -83,6 +83,11 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         kv.delete(credits_key(message.chat.id))
         await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатные открытки.")
 
+    @dp.message(Command("clear_state"))
+    async def clear_user_state(message: types.Message):
+        chat_id = message.chat.id
+        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
+        await message.answer("🧹 Состояние очищено. Начните заново с /start")
 
     # ---------------- USER FLOW ----------------
 
@@ -299,6 +304,9 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             "text_mode": st["text_mode"],
             "text_input": text_input
         }
+
+        # ОЧИЩАЕМ СОСТОЯНИЕ ДО ГЕНЕРАЦИИ, чтобы не застрять в нем
+        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
 
         credits = get_credits(chat_id)
         if credits > 0:

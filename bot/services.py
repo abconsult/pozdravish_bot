@@ -130,8 +130,17 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
              occasion_text = "праздник"
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
-    image_prompt = prompt_template.format(occasion=occasion_text)
-    image_prompt += " Strictly no text, no words, no letters, no watermark, no logo, blank center."
+
+    # For custom occasions, use a neutral theme so the model doesn't try to
+    # render the custom text as glyphs/signs on the generated background.
+    occasion_for_prompt = "праздник" if is_custom else occasion_text
+    image_prompt = prompt_template.format(occasion=occasion_for_prompt)
+    image_prompt += (
+        " ABSOLUTELY NO TEXT, NO TYPOGRAPHY, no letters, no words, no numbers,"
+        " no symbols, no signage, no labels, no logos, no watermark, no signature,"
+        " no stamps, no captions, no calligraphy, no handwriting, no headlines."
+        " Blank clean center, clean background."
+    )
 
     image_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"

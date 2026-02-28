@@ -5,7 +5,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import logging
 from fastapi import FastAPI, Request
-from aiogram import Bot, Dispatcher, Update
+from aiogram import Bot, Dispatcher
+from aiogram.types import Update
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.handlers import register_handlers
 

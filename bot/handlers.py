@@ -1,4 +1,6 @@
 import os
+import asyncio
+import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import LabeledPrice, PreCheckoutQuery, CallbackQuery, BufferedInputFile
@@ -6,7 +8,9 @@ from aiogram.types import LabeledPrice, PreCheckoutQuery, CallbackQuery, Buffere
 from bot.config import ADMIN_ID, OCCASIONS, STYLES, FONTS_LIST, PACKAGES, YUKASSA_TOKEN
 from bot.database import (
     kv, credits_key, get_credits, set_user_state, get_user_state,
-    add_credits, pending_key, pop_pending, save_pending
+    add_credits, pending_key, pop_pending, save_pending,
+    record_new_user, get_total_users, get_total_generations, 
+    get_total_revenue, record_payment, get_all_users
 )
 from bot.keyboards import (
     build_occasion_keyboard, build_style_keyboard,
@@ -14,7 +18,59 @@ from bot.keyboards import (
 )
 from bot.services import generate_postcard
 
+logger = logging.getLogger(__name__)
+
 def register_handlers(dp: Dispatcher, bot: Bot):
+    
+    # ---------------- ADMIN PANEL ----------------
+
+    @dp.message(Command("stats"))
+    async def admin_stats(message: types.Message):
+        if message.chat.id != ADMIN_ID:
+            return
+            
+        users = get_total_users()
+        generations = get_total_generations()
+        revenue = get_total_revenue()
+        
+        text = (
+            f"📊 <b>Статистика проекта:</b>\n\n"
+            f"👥 Всего пользователей: <b>{users}</b>\n"
+            f"🖼 Сгенерировано открыток: <b>{generations}</b>\n"
+            f"💰 Общая выручка: <b>{revenue} руб.</b>"
+        )
+        await message.answer(text, parse_mode="HTML")
+
+    @dp.message(Command("broadcast"))
+    async def admin_broadcast(message: types.Message):
+        if message.chat.id != ADMIN_ID:
+            return
+            
+        text_to_send = message.text.replace("/broadcast", "").strip()
+        if not text_to_send:
+            await message.answer("Использование: `/broadcast Ваш текст для рассылки`", parse_mode="Markdown")
+            return
+            
+        users = get_all_users()
+        if not users:
+            await message.answer("В базе нет пользователей для рассылки.")
+            return
+
+        await message.answer(f"⏳ Начинаю рассылку для {len(users)} пользователей...")
+        
+        success, failed = 0, 0
+        for uid in users:
+            try:
+                await bot.send_message(uid, text_to_send)
+                success += 1
+                await asyncio.sleep(0.05) # Prevent Telegram flood limits
+            except Exception as e:
+                failed += 1
+                logger.warning(f"Failed to send broadcast to {uid}: {e}")
+                
+        await message.answer(f"✅ <b>Рассылка завершена!</b>\n\nУспешно: {success}\nОшибок (заблокировали бота): {failed}", parse_mode="HTML")
+
+
     @dp.message(Command("reset"))
     async def reset_credits(message: types.Message):
         if message.chat.id != ADMIN_ID:
@@ -22,9 +78,16 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         kv.delete(credits_key(message.chat.id))
         await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатные открытки.")
 
+
+    # ---------------- USER FLOW ----------------
+
     @dp.message(Command("start"))
     async def start(message: types.Message):
         chat_id = message.chat.id
+        
+        # Admin Metrics
+        record_new_user(chat_id)
+        
         set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
         credits = get_credits(chat_id)
         await message.answer(
@@ -153,6 +216,9 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         except Exception:
             await message.answer("Оплата прошла, но пакет не распознан. Напишите /start.")
             return
+
+        # Metrics tracking
+        record_payment(PACKAGES[n]["rub"])
 
         new_credits = add_credits(chat_id, n)
         await message.answer(f"✅ Оплата успешна! Начислено {n} кредитов. Теперь доступно: {new_credits}")

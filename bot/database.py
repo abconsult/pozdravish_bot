@@ -1,4 +1,5 @@
 import json
+import time
 from upstash_redis import Redis
 from bot.config import FREE_CREDITS
 
@@ -56,3 +57,43 @@ def pop_pending(chat_id: int) -> dict | None:
         return None
     kv.delete(pending_key(chat_id))
     return json.loads(val) if isinstance(val, str) else val
+
+
+# --- Metrics & Admin DB Functions ---
+
+def record_new_user(chat_id: int) -> None:
+    """Adds a user to the set of all known users."""
+    kv.sadd("users:all", str(chat_id))
+
+def get_total_users() -> int:
+    """Returns the total number of unique users."""
+    return kv.scard("users:all")
+
+def get_all_users() -> list[int]:
+    """Returns a list of all user chat_IDs."""
+    users = kv.smembers("users:all")
+    if not users:
+        return []
+    return [int(u) for u in users]
+
+def record_generation() -> None:
+    """Increments the total generated postcards counter."""
+    kv.incr("stats:total_generations")
+
+def get_total_generations() -> int:
+    val = kv.get("stats:total_generations")
+    return int(val) if val else 0
+
+def record_payment(amount_rub: int) -> None:
+    """Records a payment amount in the total revenue tracker."""
+    try:
+        kv.incrby("stats:total_revenue", amount_rub)
+    except Exception:
+        # Fallback if value was saved as string not native int
+        val = kv.get("stats:total_revenue")
+        current = int(val) if val else 0
+        kv.set("stats:total_revenue", str(current + amount_rub))
+
+def get_total_revenue() -> int:
+    val = kv.get("stats:total_revenue")
+    return int(val) if val else 0

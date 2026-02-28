@@ -13,7 +13,7 @@ from bot.config import (
     PROTALK_FUNCTION_ID, PROTALK_BOT_ID, PROTALK_TOKEN, 
     OCCASION_TEXT_MAP, STYLE_PROMPT_MAP, FONTS_FILES
 )
-from bot.database import consume_credit, set_user_state
+from bot.database import consume_credit, set_user_state, record_generation
 from bot.keyboards import build_occasion_keyboard
 
 logger = logging.getLogger(__name__)
@@ -166,7 +166,10 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         await message.answer_photo(photo=photo, caption=f"{greeting_caption}")
 
+        # Metrics & Billing
         left = consume_credit(chat_id)
+        record_generation()
+
         await message.answer(
             f"✅ Списан 1 кредит. Осталось: {left}\n\n"
             f"Хотите ещё одну? Выберите повод:",

@@ -214,7 +214,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         if mode == "ai":
             await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
         else:
-            await message.answer("Отправьте текст поздравления (лучше 2-3 короткие строки):", reply_markup=types.ReplyKeyboardRemove())
+            await message.answer("Напишите свой текст поздравления (2-3 короткие фразы):", reply_markup=types.ReplyKeyboardRemove())
 
     @dp.callback_query(F.data.startswith("buy:"))
     async def buy_package(query: CallbackQuery):

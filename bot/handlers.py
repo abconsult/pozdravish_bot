@@ -27,6 +27,24 @@ REFERRAL_BONUS_INVITEE = 1
 
 DEFAULT_STATE = {"occasion": None, "style": None, "font": None, "text_mode": None, "addressee": None}
 
+# Occasion -> addressee question
+ADDRESSEE_PROMPT = {
+    "🎂 День рождения":  "Напишите, пожалуйста, имя именинника:",
+    "💍 Свадьба":            "Напишите, пожалуйста, имена молодожёнов:",
+    "👶 Рождение ребёнка":   "Напишите, пожалуйста, имена родителей:",
+    "🌸 8 марта":            "Напишите, пожалуйста, имя адресата (например: Мама, Любимая, Коллеги):",
+    "🎓 Завершение учёбы":  "Напишите, пожалуйста, имя выпускника:",
+}
+ADDRESSEE_PROMPT_DEFAULT = "Напишите, пожалуйста, имя адресата:"
+
+
+def get_addressee_prompt(occasion: str) -> str:
+    """Return the occasion-specific question to ask for addressee name."""
+    # Custom occasion (starts with pencil emoji)
+    if occasion.startswith("✏️ ") or occasion == "WAITING_CUSTOM_OCCASION":
+        return ADDRESSEE_PROMPT_DEFAULT
+    return ADDRESSEE_PROMPT.get(occasion, ADDRESSEE_PROMPT_DEFAULT)
+
 
 def register_handlers(dp: Dispatcher, bot: Bot):
     
@@ -236,8 +254,9 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         st["addressee"] = None  # will be captured in next step for both modes
         set_user_state(chat_id, st)
 
-        # Both modes start by asking for recipient name
-        await message.answer("Напишите имя получателя открытки", reply_markup=types.ReplyKeyboardRemove())
+        # Ask for recipient name with occasion-specific wording
+        prompt = get_addressee_prompt(st.get("occasion", ""))
+        await message.answer(prompt, reply_markup=types.ReplyKeyboardRemove())
 
     @dp.callback_query(F.data.startswith("buy:"))
     async def buy_package(query: CallbackQuery):

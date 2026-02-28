@@ -28,8 +28,7 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
     )
 
     bot_chat_id = f"ask{uuid.uuid4().hex[:8]}"
-    send_url = "https://us1.api.pro-talk.ru/api/v1.0/send_message_async"
-    poll_url = "https://us1.api.pro-talk.ru/api/v1.0/get_last_reply"
+    send_url = "https://api.pro-talk.ru/api/v1.0/send_message"
 
     payload_send = {
         "bot_id": int(PROTALK_BOT_ID),
@@ -38,34 +37,23 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         "message": meta_prompt
     }
 
-    payload_poll = {
-        "bot_id": int(PROTALK_BOT_ID),
-        "bot_token": PROTALK_TOKEN,
-        "bot_chat_id": bot_chat_id
-    }
-
     fallback = f"С праздником, {name}! 🎉"
 
     try:
         async with aiohttp.ClientSession() as session:
-            # Отправляем сообщение на генерацию (асинхронно)
+            # Use synchronous send_message which returns the answer immediately
             async with session.post(send_url, json=payload_send) as resp:
                 if resp.status != 200:
-                    logger.error(f"ProTalk send_message_async error: HTTP {resp.status}")
+                    logger.error(f"ProTalk send_message error: HTTP {resp.status}")
                     return fallback
-
-            # Опрашиваем сервер, пока не получим ответ (до 15 попыток ~15 сек)
-            for _ in range(15):
-                await asyncio.sleep(1)
-                async with session.post(poll_url, json=payload_poll) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        text = data.get("message", "")
-                        if text:
-                            return text.strip()
-            
-            logger.warning("ProTalk polling timeout reached")
-            return fallback
+                
+                data = await resp.json()
+                text = data.get("message", "")
+                if text:
+                    return text.strip()
+                else:
+                    logger.warning("ProTalk returned empty message in synchronous call")
+                    return fallback
 
     except Exception as e:
         logger.error(f"Error fetching greeting text: {e}", exc_info=True)

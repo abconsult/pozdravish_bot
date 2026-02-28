@@ -80,7 +80,7 @@ OCCASION_TEXT_MAP = {
 STYLE_PROMPT_MAP = {
     "Акварель": (
         "Акварельный фон для дизайна. Тематика: подарки на {occasion}. "
-        "По краям холста детализированные фигурки различных уместных подарков на {occasion}. "
+        "По краям холста акварельные рисунки детализированные фигурки различных уместных подарков на {occasion}. "
         "В самом центре большое абсолютно пустое пространство. "
         "Без букв, без слов, без текста. Empty center, watercolor background, pure empty space, no text."
     ),
@@ -253,7 +253,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             text_to_draw = f"{name},\nс днём свадьбы!"
         elif occasion_text == "рождение ребёнка":
             text_to_draw = f"{name},\nс новорожденным!"
-        elif occasion_text == "праздник 8 марта":
+        elif occasion_text == "8 марта":
             text_to_draw = f"{name},\nс 8 Марта!"
         elif occasion_text == "завершение учёбы":
             text_to_draw = f"{name},\nс завершением учёбы!"

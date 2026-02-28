@@ -152,7 +152,7 @@ def build_style_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text=STYLES[0]), KeyboardButton(text=STYLES[1])],
         [KeyboardButton(text=STYLES[2]), KeyboardButton(text=STYLES[3])],
-        [KeyboardButton(text=STYLES[4]), KeyboardButton(text=STYLES[5])] 
+        [KeyboardButton(text=STYLES[4]), KeyboardButton(text=STYLES[5])]
     ]
     return ReplyKeyboardMarkup(
         keyboard=buttons,
@@ -366,13 +366,12 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
 
-        # Используем текст от ProTalk как подпись к открытке
         await message.answer_photo(
             photo=photo,
             caption=(
                 f"{greeting_caption}\n\n"
-                f"🎨 Стиль: {style} | ✍️ Шрифт: {chosen_font_name}"
-            ),
+                f"🎨 Стиль: {style} · ✏️ Шрифт: {payload.get('font', '—')}"
+            )
         )
 
         left = consume_credit(chat_id)

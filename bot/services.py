@@ -87,7 +87,9 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         occasion_text = next((v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник")
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
+    # Добавляем жесткие инструкции, чтобы ИИ не генерировал случайные символы на фоне открытки
     image_prompt = prompt_template.format(occasion=occasion_text)
+    image_prompt += ". ВАЖНО: На картинке не должно быть никакого текста, букв, надписей, слов или водяных знаков. Оставь фон чистым для текста."
 
     image_url = (
         "https://api.pro-talk.ru/api/v1.0/run_function_get"
@@ -119,23 +121,19 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         draw = ImageDraw.Draw(img)
 
         if text_mode == "ai":
-            if greeting_caption and greeting_caption != f"С праздником, {text_input}! 🎉":
-                # Use the AI generated text directly on the image
-                text_to_draw = greeting_caption
+            # На открытке пишем только краткое имя и повод
+            if occasion_text == "день рождения":
+                text_to_draw = f"С Днём Рождения,\n{text_input}!"
+            elif occasion_text == "свадьбу":
+                text_to_draw = f"{text_input},\nс днём свадьбы!"
+            elif occasion_text == "рождение ребёнка":
+                text_to_draw = f"{text_input},\nс новорожденным!"
+            elif occasion_text == "8 марта":
+                text_to_draw = f"{text_input},\nс 8 Марта!"
+            elif occasion_text == "завершение учёбы":
+                text_to_draw = f"{text_input},\nс завершением учёбы!"
             else:
-                # Fallback layout if API failed
-                if occasion_text == "день рождения":
-                    text_to_draw = f"С Днём Рождения,\n{text_input}!"
-                elif occasion_text == "свадьбу":
-                    text_to_draw = f"{text_input},\nс днём свадьбы!"
-                elif occasion_text == "рождение ребёнка":
-                    text_to_draw = f"{text_input},\nс новорожденным!"
-                elif occasion_text == "8 марта":
-                    text_to_draw = f"{text_input},\nс 8 Марта!"
-                elif occasion_text == "завершение учёбы":
-                    text_to_draw = f"{text_input},\nс завершением учёбы!"
-                else:
-                    text_to_draw = f"{text_input},\nпоздравляю!"
+                text_to_draw = f"{text_input},\nпоздравляю!"
         else:
             text_to_draw = text_input
 
@@ -150,7 +148,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             while True:
                 bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
                 text_width = bbox[2] - bbox[0]
-                # Make sure the text fits both width and reasonable height
                 text_height = bbox[3] - bbox[1]
                 if (text_width <= 824 and text_height <= 800) or font_size <= 30:
                     break
@@ -181,7 +178,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
 
-        await message.answer_photo(photo=photo, caption="Ваша открытка готова! ✨")
+        # Подпись к фото теперь - это большое красивое поздравление от ИИ
+        await message.answer_photo(photo=photo, caption=f"{greeting_caption}")
 
         # Metrics & Billing
         left = consume_credit(chat_id)

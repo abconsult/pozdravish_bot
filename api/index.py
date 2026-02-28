@@ -371,6 +371,7 @@ async def choose_occasion(message: types.Message):
     await message.answer("Теперь выберите стиль:", reply_markup=build_style_keyboard())
 
 @dp.message(F.text.in_(STYLES))
+@dp.message(F.text.in_(STYLES))
 async def choose_style(message: types.Message):
     chat_id = message.chat.id
     st = user_state.get(chat_id, {"occasion": None, "style": None, "font": None})
@@ -379,8 +380,21 @@ async def choose_style(message: types.Message):
         return
     st["style"] = message.text
     user_state[chat_id] = st
-    # ВМЕСТО ввода имени, теперь просим выбрать шрифт:
-    await message.answer("Отлично! Теперь выберите шрифт надписи:", reply_markup=build_font_keyboard())
+
+    # Отправляем превью шрифтов картинкой
+    preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts_preview.jpg")
+    try:
+        with open(preview_path, "rb") as f:
+            preview_bytes = f.read()
+        await message.answer_photo(
+            photo=BufferedInputFile(preview_bytes, filename="fonts_preview.jpg"),
+            caption="Отлично! Теперь выберите шрифт для надписи:",
+            reply_markup=build_font_keyboard()
+        )
+    except FileNotFoundError:
+        # Если файл не найден — просто показываем кнопки без превью
+        await message.answer("Отлично! Теперь выберите шрифт для надписи:", reply_markup=build_font_keyboard())
+    
 
 @dp.message(F.text.in_(FONTS_LIST))
 async def choose_font(message: types.Message):

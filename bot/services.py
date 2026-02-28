@@ -39,15 +39,18 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
 
     fallback = f"С праздником, {name}! 🎉"
 
+    logger.info(f"Sending text generation request to ProTalk: URL={send_url}, payload={json.dumps(payload_send, ensure_ascii=False)}")
+
     try:
         async with aiohttp.ClientSession() as session:
-            # Use synchronous send_message which returns the answer immediately
             async with session.post(send_url, json=payload_send) as resp:
                 if resp.status != 200:
                     logger.error(f"ProTalk send_message error: HTTP {resp.status}")
                     return fallback
                 
                 data = await resp.json()
+                logger.info(f"ProTalk text generation response: {json.dumps(data, ensure_ascii=False)}")
+
                 text = data.get("message", "")
                 if text:
                     return text.strip()
@@ -72,10 +75,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     if is_custom:
         occasion_text = occasion.replace("✏️ ", "").strip()
     else:
-        # FIX: Try exact match first, then fallback to stripping to be safe.
         occasion_text = OCCASION_TEXT_MAP.get(occasion) or OCCASION_TEXT_MAP.get(occasion.strip())
-        # FIX: The issue might be invisible characters in the string returned from Redis.
-        # If we still can't find it, we search for the substring in keys.
         if not occasion_text:
              for key, val in OCCASION_TEXT_MAP.items():
                  if key in occasion or occasion in key or key.split(" ")[-1] in occasion:
@@ -87,10 +87,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
              occasion_text = "праздник"
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
-    # Добавляем жесткие инструкции, чтобы ИИ не генерировал случайные символы на фоне открытки
     image_prompt = prompt_template.format(occasion=occasion_text)
-    # Removed prompt injection ". ВАЖНО: На картинке не должно быть никакого текста..." 
-    # because AI started literally writing "подарки на свадьбу" ignoring the context.
     image_prompt += " Strictly no text, no words, no letters, blank center."
 
     image_url = (
@@ -101,6 +98,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         f"&prompt={urllib.parse.quote(image_prompt)}"
         f"&output=image"
     )
+
+    logger.info(f"Sending image generation request to ProTalk: prompt='{image_prompt}'")
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -123,7 +122,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         draw = ImageDraw.Draw(img)
 
         if text_mode == "ai":
-            # На открытке пишем только краткое имя и повод
             if occasion_text == "день рождения":
                 text_to_draw = f"С Днём Рождения,\n{text_input}!"
             elif occasion_text == "свадьбу":
@@ -144,6 +142,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         font_size = 100
         try:
+            font_path = os.path.join(os.path.dirname(__file__), "str_replace_test.ttf") # dummy fallback
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, font_size)
 
@@ -180,10 +179,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
 
-        # Подпись к фото теперь - это большое красивое поздравление от ИИ
         await message.answer_photo(photo=photo, caption=f"{greeting_caption}")
 
-        # Metrics & Billing
         left = consume_credit(chat_id)
         record_generation()
 

@@ -84,10 +84,12 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     if is_custom:
         occasion_text = occasion.replace("✏️ ", "").strip()
     else:
-        # No string slicing or replacing. Just a direct exact match with the key in config.py
-        occasion_text = OCCASION_TEXT_MAP.get(occasion, "праздник")
-        if occasion_text == "праздник":
+        # FIX: Redis restores dictionary keys differently. Ensure occasion is found regardless of trailing spaces.
+        # Try exact match first, then fallback to stripping to be safe.
+        occasion_text = OCCASION_TEXT_MAP.get(occasion) or OCCASION_TEXT_MAP.get(occasion.strip())
+        if not occasion_text:
              logger.error(f"Failed to map occasion exact match: '{occasion}'. Using default.")
+             occasion_text = "праздник"
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
     # Добавляем жесткие инструкции, чтобы ИИ не генерировал случайные символы на фоне открытки

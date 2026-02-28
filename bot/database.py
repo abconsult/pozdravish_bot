@@ -61,6 +61,10 @@ def pop_pending(chat_id: int) -> dict | None:
 
 # --- Metrics & Admin DB Functions ---
 
+def is_user_exists(chat_id: int) -> bool:
+    """Checks if user has already started the bot before."""
+    return kv.sismember("users:all", str(chat_id))
+
 def record_new_user(chat_id: int) -> None:
     """Adds a user to the set of all known users."""
     kv.sadd("users:all", str(chat_id))

@@ -96,6 +96,7 @@ https://api.telegram.org/bot123456789:ABCdefGHI/setWebhook?url=https://my-bot.ve
 | `YUKASSA_PROVIDER_TOKEN`    | Токен провайдера ЮКасса для приёма платежей                   | ✅ |
 | `UPSTASH_REDIS_REST_URL`    | URL Upstash Redis (для хранения кредитов и состояний)          | ✅ |
 | `UPSTASH_REDIS_REST_TOKEN`  | Токен доступа к Upstash Redis                                  | ✅ |
+| `ADMIN_ID`                  | Telegram ID администратора бота для выполнения скрытых команд | ✅ |
 
 > Upstash Redis можно бесплатно создать на [upstash.com](https://upstash.com/).
 

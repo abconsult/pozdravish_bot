@@ -21,6 +21,7 @@ PROTALK_BOT_ID       = os.getenv("PROTALK_BOT_ID", "23141")
 PROTALK_TOKEN        = os.getenv("PROTALK_TOKEN", "")
 PROTALK_FUNCTION_ID  = os.getenv("PROTALK_FUNCTION_ID", "609")
 YUKASSA_TOKEN        = os.getenv("YUKASSA_PROVIDER_TOKEN", "")
+ADMIN_ID             = int(os.getenv("ADMIN_ID", "128247430"))
 
 # Upstash REST env vars
 kv = Redis.from_env()
@@ -407,7 +408,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 # -------------------- handlers --------------------
 @dp.message(Command("reset"))
 async def reset_credits(message: types.Message):
-    if message.chat.id != 128247430:
+    if message.chat.id != ADMIN_ID:
         return
     kv.delete(credits_key(message.chat.id))
     await message.answer("🔄 Счетчик сброшен! Теперь снова доступно 3 бесплатные открытки.")

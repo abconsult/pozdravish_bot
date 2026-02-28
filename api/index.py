@@ -43,6 +43,7 @@ OCCASIONS = [
     "👶 Рождение ребёнка",
     "🌸 8 марта",
     "🎓 Завершение учёбы",
+    "✏️ Свой повод",
 ]
 
 STYLES = [
@@ -126,7 +127,7 @@ def build_occasion_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text=OCCASIONS[0]), KeyboardButton(text=OCCASIONS[1])],
         [KeyboardButton(text=OCCASIONS[2]), KeyboardButton(text=OCCASIONS[3])],
-        [KeyboardButton(text=OCCASIONS[4])]
+        [KeyboardButton(text=OCCASIONS[4]), KeyboardButton(text=OCCASIONS[5])],
     ]
     return ReplyKeyboardMarkup(
         keyboard=buttons,
@@ -134,6 +135,7 @@ def build_occasion_keyboard() -> ReplyKeyboardMarkup:
         one_time_keyboard=True,
         input_field_placeholder="Выберите повод",
     )
+
 
 def build_font_keyboard() -> ReplyKeyboardMarkup:
     buttons = [

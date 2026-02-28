@@ -184,7 +184,7 @@ def get_user_state(chat_id: int) -> dict:
             return json.loads(val) if isinstance(val, str) else val
         except json.JSONDecodeError:
             pass
-    return {"occasion": None, "style": None, "font": None}
+    return {"occasion": None, "style": None, "font": None, "text_mode": None}
 
 def set_user_state(chat_id: int, state: dict) -> None:
     kv.set(state_key(chat_id), json.dumps(state, ensure_ascii=False))
@@ -279,9 +279,10 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
 async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
     occasion = payload["occasion"]
     style = payload["style"]
-    name = payload["name"]
+    text_mode = payload.get("text_mode", "ai")
+    text_input = payload["text_input"]
 
-    wait_msg = await message.answer("⏳ Рисую открытку и пишу поздравление, подождите...")
+    wait_msg = await message.answer("⏳ Рисую открытку, подождите...")
 
     # Определяем occasion_text: поддержка кастомного повода (✏️ ...)
     is_custom = occasion.startswith("✏️ ")
@@ -305,7 +306,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     )
 
     try:
-        # ✅ Запускаем запрос картинки и текста ПАРАЛЛЕЛЬНО
+        # ✅ Запускаем запрос картинки и текста ПАРАЛЛЕЛЬНО (если нужно)
         async with aiohttp.ClientSession() as session:
             async def fetch_image():
                 async with session.get(image_url) as resp:
@@ -313,27 +314,34 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
                         raise Exception(f"Image API Error: HTTP {resp.status}")
                     return await resp.read()
 
-            image_bytes, greeting_caption = await asyncio.gather(
-                fetch_image(),
-                get_greeting_text_from_protalk(name, occasion_text),
-            )
+            if text_mode == "ai":
+                image_bytes, greeting_caption = await asyncio.gather(
+                    fetch_image(),
+                    get_greeting_text_from_protalk(text_input, occasion_text),
+                )
+            else:
+                image_bytes = await fetch_image()
+                greeting_caption = "Ваша открытка готова! ✨"
 
         img = Image.open(io.BytesIO(image_bytes))
         draw = ImageDraw.Draw(img)
 
         # Формируем текст на открытке в зависимости от повода
-        if occasion_text == "день рождения":
-            text_to_draw = f"С Днём Рождения,\n{name}!"
-        elif occasion_text == "свадьбу":
-            text_to_draw = f"{name},\nс днём свадьбы!"
-        elif occasion_text == "рождение ребёнка":
-            text_to_draw = f"{name},\nс новорожденным!"
-        elif occasion_text == "8 марта":
-            text_to_draw = f"{name},\nс 8 Марта!"
-        elif occasion_text == "завершение учёбы":
-            text_to_draw = f"{name},\nс завершением учёбы!"
+        if text_mode == "ai":
+            if occasion_text == "день рождения":
+                text_to_draw = f"С Днём Рождения,\n{text_input}!"
+            elif occasion_text == "свадьбу":
+                text_to_draw = f"{text_input},\nс днём свадьбы!"
+            elif occasion_text == "рождение ребёнка":
+                text_to_draw = f"{text_input},\nс новорожденным!"
+            elif occasion_text == "8 марта":
+                text_to_draw = f"{text_input},\nс 8 Марта!"
+            elif occasion_text == "завершение учёбы":
+                text_to_draw = f"{text_input},\nс завершением учёбы!"
+            else:
+                text_to_draw = f"{text_input},\nпоздравляю!"
         else:
-            text_to_draw = f"{name},\nпоздравляю!"
+            text_to_draw = text_input
 
         # Достаём шрифт из payload
         chosen_font_name = payload.get("font", "Lobster")
@@ -395,7 +403,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             f"Хотите ещё одну? Выберите повод:",
             reply_markup=build_occasion_keyboard(),
         )
-        set_user_state(chat_id, {"occasion": None, "style": None, "font": None})
+        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
 
     except Exception as e:
         await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
@@ -416,7 +424,7 @@ async def reset_credits(message: types.Message):
 @dp.message(Command("start"))
 async def start(message: types.Message):
     chat_id = message.chat.id
-    set_user_state(chat_id, {"occasion": None, "style": None, "font": None})
+    set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None})
     credits = get_credits(chat_id)
     await message.answer(
         f"Привет! Я делаю поздравления с ИИ 😃🙌🏻\n\n"
@@ -474,8 +482,37 @@ async def choose_font(message: types.Message):
         return
 
     st["font"] = message.text
+    st["text_mode"] = None
     set_user_state(chat_id, st)
-    await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
+    
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✨ Сгенерировать ИИ")],
+            [KeyboardButton(text="✏️ Написать свой текст")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("Как напишем поздравление?", reply_markup=kb)
+
+@dp.message(F.text.in_(["✨ Сгенерировать ИИ", "✏️ Написать свой текст"]))
+async def choose_text_mode(message: types.Message):
+    chat_id = message.chat.id
+    st = get_user_state(chat_id)
+
+    if not st.get("font"):
+        await message.answer("Сначала выберите шрифт:", reply_markup=build_font_keyboard())
+        return
+
+    mode = "ai" if message.text == "✨ Сгенерировать ИИ" else "custom"
+    st["text_mode"] = mode
+    set_user_state(chat_id, st)
+
+    if mode == "ai":
+        await message.answer("Напишите имя получателя открытки:", reply_markup=types.ReplyKeyboardRemove())
+    else:
+        await message.answer("Отправьте текст поздравления (лучше 2-3 короткие строки):", reply_markup=types.ReplyKeyboardRemove())
+
 
 @dp.callback_query(F.data.startswith("buy:"))
 async def buy_package(query: CallbackQuery):
@@ -537,20 +574,26 @@ async def paid(message: types.Message):
         await message.answer("Выберите повод для новой открытки:", reply_markup=build_occasion_keyboard())
 
 @dp.message()
-async def name_and_route(message: types.Message):
+async def text_input_and_route(message: types.Message):
     chat_id = message.chat.id
     st = get_user_state(chat_id)
 
-    if not st.get("occasion") or not st.get("style") or not st.get("font"):
+    if not st.get("occasion") or not st.get("style") or not st.get("font") or not st.get("text_mode"):
         await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
         return
 
-    name = message.text.strip()
-    if not name:
-        await message.answer("Введите имя текстом.")
+    text_input = message.text.strip()
+    if not text_input:
+        await message.answer("Пожалуйста, отправьте текст.")
         return
 
-    payload = {"occasion": st["occasion"], "style": st["style"], "font": st["font"], "name": name}
+    payload = {
+        "occasion": st["occasion"], 
+        "style": st["style"], 
+        "font": st["font"], 
+        "text_mode": st["text_mode"],
+        "text_input": text_input
+    }
 
     credits = get_credits(chat_id)
     if credits > 0:

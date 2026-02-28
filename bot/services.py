@@ -24,7 +24,7 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         f"Напиши короткое красивое поздравление на русском языке. "
         f"Получатель: {name}. Повод: {occasion}. "
         f"Стиль: тёплый, искренний, 2-3 предложения максимум. "
-        f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
+        f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений. Не используй списки или нумерацию."
     )
 
     bot_chat_id = f"ask{uuid.uuid4().hex[:8]}"
@@ -119,18 +119,23 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         draw = ImageDraw.Draw(img)
 
         if text_mode == "ai":
-            if occasion_text == "день рождения":
-                text_to_draw = f"С Днём Рождения,\n{text_input}!"
-            elif occasion_text == "свадьбу":
-                text_to_draw = f"{text_input},\nс днём свадьбы!"
-            elif occasion_text == "рождение ребёнка":
-                text_to_draw = f"{text_input},\nс новорожденным!"
-            elif occasion_text == "8 марта":
-                text_to_draw = f"{text_input},\nс 8 Марта!"
-            elif occasion_text == "завершение учёбы":
-                text_to_draw = f"{text_input},\nс завершением учёбы!"
+            if greeting_caption and greeting_caption != f"С праздником, {text_input}! 🎉":
+                # Use the AI generated text directly on the image
+                text_to_draw = greeting_caption
             else:
-                text_to_draw = f"{text_input},\nпоздравляю!"
+                # Fallback layout if API failed
+                if occasion_text == "день рождения":
+                    text_to_draw = f"С Днём Рождения,\n{text_input}!"
+                elif occasion_text == "свадьбу":
+                    text_to_draw = f"{text_input},\nс днём свадьбы!"
+                elif occasion_text == "рождение ребёнка":
+                    text_to_draw = f"{text_input},\nс новорожденным!"
+                elif occasion_text == "8 марта":
+                    text_to_draw = f"{text_input},\nс 8 Марта!"
+                elif occasion_text == "завершение учёбы":
+                    text_to_draw = f"{text_input},\nс завершением учёбы!"
+                else:
+                    text_to_draw = f"{text_input},\nпоздравляю!"
         else:
             text_to_draw = text_input
 
@@ -145,7 +150,9 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
             while True:
                 bbox = draw.textbbox((0, 0), text_to_draw, font=font, align="center")
                 text_width = bbox[2] - bbox[0]
-                if text_width <= 824 or font_size <= 40:
+                # Make sure the text fits both width and reasonable height
+                text_height = bbox[3] - bbox[1]
+                if (text_width <= 824 and text_height <= 800) or font_size <= 30:
                     break
                 font_size -= 5
                 font = ImageFont.truetype(font_path, font_size)
@@ -174,7 +181,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
 
-        await message.answer_photo(photo=photo, caption=f"{greeting_caption}")
+        await message.answer_photo(photo=photo, caption="Ваша открытка готова! ✨")
 
         # Metrics & Billing
         left = consume_credit(chat_id)

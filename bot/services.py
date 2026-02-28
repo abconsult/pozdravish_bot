@@ -28,8 +28,8 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
     )
 
     bot_chat_id = f"ask{uuid.uuid4().hex[:8]}"
-    send_url = "https://eu1.api.pro-talk.ru/api/v1.0/send_message_async"
-    poll_url = "https://eu1.api.pro-talk.ru/api/v1.0/get_last_reply"
+    send_url = "https://us1.api.pro-talk.ru/api/v1.0/send_message_async"
+    poll_url = "https://us1.api.pro-talk.ru/api/v1.0/get_last_reply"
 
     payload_send = {
         "bot_id": int(PROTALK_BOT_ID),

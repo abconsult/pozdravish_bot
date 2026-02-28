@@ -84,8 +84,8 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     if is_custom:
         occasion_text = occasion.replace("✏️ ", "").strip()
     else:
-        # Fix matching logic to map emoji prefix to occasion string
-        occasion_clean = occasion.split(" ", 1)[1] if " " in occasion else occasion
+        # Fix matching logic: exact match without emoji instead of finding a substring
+        occasion_clean = occasion.replace("🎂 ", "").replace("💍 ", "").replace("👶 ", "").replace("🌸 ", "").replace("🎓 ", "").strip()
         occasion_text = OCCASION_TEXT_MAP.get(occasion_clean, "праздник")
 
     prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])

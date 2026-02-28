@@ -237,7 +237,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         set_user_state(chat_id, st)
 
         # Both modes start by asking for recipient name
-        await message.answer("Напишите имя получателя открытки (например: Мама, Иван, Коллеги):", reply_markup=types.ReplyKeyboardRemove())
+        await message.answer("Напишите имя получателя открытки", reply_markup=types.ReplyKeyboardRemove())
 
     @dp.callback_query(F.data.startswith("buy:"))
     async def buy_package(query: CallbackQuery):

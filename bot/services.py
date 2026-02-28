@@ -84,9 +84,16 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
     if is_custom:
         occasion_text = occasion.replace("✏️ ", "").strip()
     else:
-        # FIX: Redis restores dictionary keys differently. Ensure occasion is found regardless of trailing spaces.
-        # Try exact match first, then fallback to stripping to be safe.
+        # FIX: Try exact match first, then fallback to stripping to be safe.
         occasion_text = OCCASION_TEXT_MAP.get(occasion) or OCCASION_TEXT_MAP.get(occasion.strip())
+        # FIX: The issue might be invisible characters in the string returned from Redis.
+        # If we still can't find it, we search for the substring in keys.
+        if not occasion_text:
+             for key, val in OCCASION_TEXT_MAP.items():
+                 if key in occasion or occasion in key or key.split(" ")[-1] in occasion:
+                     occasion_text = val
+                     break
+
         if not occasion_text:
              logger.error(f"Failed to map occasion exact match: '{occasion}'. Using default.")
              occasion_text = "праздник"

@@ -28,12 +28,11 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
     )
 
     bot_chat_id = f"ask{uuid.uuid4().hex[:8]}"
-    send_url = "https://api.pro-talk.ru/api/v1.0/send_message"
+    send_url = f"https://api.pro-talk.ru/api/v1.0/ask/{PROTALK_TOKEN}"
 
     payload_send = {
         "bot_id": int(PROTALK_BOT_ID),
-        "bot_token": PROTALK_TOKEN,
-        "bot_chat_id": bot_chat_id,
+        "chat_id": bot_chat_id,
         "message": meta_prompt
     }
 
@@ -45,17 +44,18 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         async with aiohttp.ClientSession() as session:
             async with session.post(send_url, json=payload_send) as resp:
                 if resp.status != 200:
-                    logger.error(f"ProTalk send_message error: HTTP {resp.status}")
+                    logger.error(f"ProTalk /ask error: HTTP {resp.status}")
                     return fallback
                 
                 data = await resp.json()
                 logger.info(f"ProTalk text generation response: {json.dumps(data, ensure_ascii=False)}")
 
-                text = data.get("message", "")
+                # The ProTalk /ask API returns the result in the 'done' field
+                text = data.get("done", "")
                 if text:
                     return text.strip()
                 else:
-                    logger.warning("ProTalk returned empty message in synchronous call")
+                    logger.warning("ProTalk returned empty 'done' message in synchronous call")
                     return fallback
 
     except Exception as e:
@@ -142,7 +142,6 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
 
         font_size = 100
         try:
-            font_path = os.path.join(os.path.dirname(__file__), "str_replace_test.ttf") # dummy fallback
             font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
             font = ImageFont.truetype(font_path, font_size)
 

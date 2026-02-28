@@ -160,9 +160,13 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     @dp.message(F.text.in_(OCCASIONS))
     async def choose_occasion(message: types.Message):
         chat_id = message.chat.id
-        st = get_user_state(chat_id)
-        st["occasion"] = message.text
-        st["style"] = None
+        # Принудительная очистка старого состояния перед записью нового повода
+        st = {
+            "occasion": message.text,
+            "style": None,
+            "font": None,
+            "text_mode": None
+        }
         set_user_state(chat_id, st)
         await message.answer("Теперь выберите стиль:", reply_markup=build_style_keyboard())
 

@@ -177,7 +177,11 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         if not st.get("occasion"):
             await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
             return
+            
+        # Очищаем последующие шаги при смене стиля, сохраняя повод
         st["style"] = message.text
+        st["font"] = None
+        st["text_mode"] = None
         set_user_state(chat_id, st)
 
         preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts_preview.jpg")

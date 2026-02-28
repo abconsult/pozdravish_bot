@@ -370,8 +370,7 @@ async def generate_postcard(chat_id: int, message: types.Message, payload: dict)
         await message.answer_photo(
             photo=photo,
             caption=(
-                f"{greeting_caption}\n\n"
-                f"🎨 Стиль: {style} · ✏️ Шрифт: {payload.get('font', '—')}"
+                f"{greeting_caption}"
             )
         )
 

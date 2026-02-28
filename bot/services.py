@@ -26,18 +26,12 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
         f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
     )
 
-    # Use the proper text completion API for ProTalk, not the function runner
-    # Function 609 is only for images.
-    protalk_url = (
-        "https://api.pro-talk.ru/api/v1.0/completion"
-    )
+    protalk_url = f"https://api.pro-talk.ru/api/v1.0/ask/{PROTALK_TOKEN}"
     
     payload = {
-        "bot_id": PROTALK_BOT_ID,
-        "bot_token": PROTALK_TOKEN,
-        "messages": [
-            {"role": "user", "content": meta_prompt}
-        ]
+        "bot_id": int(PROTALK_BOT_ID),
+        "chat_id": "ask123456",
+        "message": meta_prompt
     }
 
     fallback = f"С праздником, {name}! 🎉"
@@ -51,16 +45,9 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
 
                 result = await resp.json()
                 
-                # Extract text based on standard ChatCompletions format
                 try:
-                    if "choices" in result and len(result["choices"]) > 0:
-                        text = result["choices"][0]["message"]["content"]
-                        return text.strip() or fallback
-                    elif "response" in result:
-                        return str(result["response"]).strip() or fallback
-                    else:
-                        logger.error(f"Unexpected response format from ProTalk: {result}")
-                        return fallback
+                    text = result.get("done", "")
+                    return text.strip() or fallback
                 except Exception as e:
                     logger.error(f"Failed to parse ProTalk text response: {e}", exc_info=True)
                     return fallback

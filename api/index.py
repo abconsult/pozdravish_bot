@@ -136,7 +136,6 @@ def build_occasion_keyboard() -> ReplyKeyboardMarkup:
     )
 
 def build_font_keyboard() -> ReplyKeyboardMarkup:
-    # Делаем кнопки по 2 в ряд
     buttons = [
         [KeyboardButton(text=FONTS_LIST[0]), KeyboardButton(text=FONTS_LIST[1])],
         [KeyboardButton(text=FONTS_LIST[2]), KeyboardButton(text=FONTS_LIST[3])]
@@ -242,17 +241,19 @@ async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
                 if resp.status != 200:
                     return fallback
 
-                # ProTalk может вернуть JSON или plain text — поддерживаем оба варианта
+                # ✅ Читаем тело ОДИН РАЗ, затем парсим как JSON или используем как текст
+                raw = await resp.text()
                 try:
-                    result = await resp.json(content_type=None)
+                    result = json.loads(raw)
                     text = (
                         (result.get("result") if isinstance(result, dict) else None)
                         or (result.get("text") if isinstance(result, dict) else None)
                         or (result.get("response") if isinstance(result, dict) else None)
-                        or ""
+                        or (raw if isinstance(result, str) else "")
                     )
-                except Exception:
-                    text = await resp.text()
+                except json.JSONDecodeError:
+                    # ProTalk вернул plain text — используем напрямую
+                    text = raw
 
                 text = (text or "").strip()
                 return text or fallback

@@ -233,6 +233,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
     async def choose_style(message: types.Message):
         chat_id = message.chat.id
         st = get_user_state(chat_id)
+        
         if not st.get("occasion") or st.get("occasion") == "WAITING_CUSTOM_OCCASION":
             await message.answer("Сначала выберите повод:", reply_markup=build_occasion_keyboard())
             return
@@ -242,19 +243,8 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         st["text_mode"] = None
         set_user_state(chat_id, st)
 
-        preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts", "fonts_preview.jpg")
-        try:
-            with open(preview_path, "rb") as f:
-                preview_bytes = f.read()
-            await message.answer_photo(
-                photo=BufferedInputFile(preview_bytes, filename="fonts_preview.jpg"),
-                caption="Отлично! Теперь выберите шрифт для надписи:",
-                reply_markup=build_font_keyboard()
-            )
-        except Exception as e:
-            # Silently fallback to text if image is missing or cannot be sent
-            logger.warning(f"Failed to send font preview: {e}")
-            await message.answer("Отлично! Теперь выберите шрифт для надписи:", reply_markup=build_font_keyboard())
+        # Removed local file read completely to avoid Vercel hanging
+        await message.answer("Отлично! Теперь выберите шрифт для надписи:", reply_markup=build_font_keyboard())
 
     @dp.message(F.text.in_(FONTS_LIST))
     async def choose_font(message: types.Message):

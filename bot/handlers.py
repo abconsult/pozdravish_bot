@@ -405,11 +405,46 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
             return
 
-        # 3. Handle Greeting Text Input (both AI and custom mode)
-        if st["text_mode"] == "custom" and len(text_input) > MAX_CUSTOM_TEXT_LENGTH:
+        # 3. Waiting for addressee name (both AI and custom modes go through here first)
+        if st.get("addressee") is None:
+            if len(text_input) > 50:
+                await message.answer("Имя адресата слишком длинное. Пожалуйста, напишите короче.")
+                return
+                
+            st["addressee"] = text_input
+            set_user_state(chat_id, st)
+
+            if st["text_mode"] == "custom":
+                # Custom mode: after name, ask for the greeting text
+                await message.answer(f"Напишите свой текст поздравления (максимум {MAX_CUSTOM_TEXT_LENGTH} символов):")
+            else:
+                # AI mode: name captured, generate now
+                payload = {
+                    "occasion": st["occasion"],
+                    "style": st["style"],
+                    "font": st["font"],
+                    "text_mode": "ai",
+                    "text_input": text_input,   # used for AI greeting generation
+                    "addressee": text_input,    # same name goes on image
+                }
+                set_user_state(chat_id, DEFAULT_STATE.copy())
+                credits = get_credits(chat_id)
+                if credits > 0:
+                    await generate_postcard(chat_id, message, payload)
+                else:
+                    save_pending(chat_id, payload)
+                    await message.answer(
+                        "У вас закончились бесплатные открытки.\n"
+                        "Выберите пакет для продолжения или пригласите друга через /referral:",
+                        reply_markup=build_packages_keyboard()
+                    )
+            return
+
+        # 4. Custom mode only: greeting text received -> check length -> generate postcard
+        if len(text_input) > MAX_CUSTOM_TEXT_LENGTH:
             await message.answer(
                 f"Текст слишком длинный ({len(text_input)} символов). "
-                f"Пожалуйста, уложитесь в {MAX_CUSTOM_TEXT_LENGTH} символов."
+                f"Пожалуйста, уложитесь в {MAX_CUSTOM_TEXT_LENGTH} символов, чтобы он красиво смотрелся на открытке."
             )
             return
 

@@ -29,6 +29,18 @@ from bot.database import (
 
 logger = logging.getLogger(__name__)
 
+# Prefix used in handlers.py when user enters a custom occasion
+CUSTOM_OCCASION_PREFIX = "✏️ "
+
+# Module-level constant — avoids recreating dict on every format_image_text call
+_OCCASION_DISPLAY_MAP: dict[str, str] = {
+    "день рождения": "с Днём Рождения",
+    "свадьбу": "с Днём Свадьбы",
+    "рождение ребёнка": "с Новорожденным",
+    "8 марта": "с 8 Марта",
+    "завершение учёбы": "с Выпуском",
+}
+
 
 async def fetch_with_retry(
     url: str,
@@ -83,7 +95,8 @@ async def get_greeting_text_from_protalk(
                     (result.get("result") if isinstance(result, dict) else None)
                     or (result.get("text") if isinstance(result, dict) else None)
                     or (result.get("response") if isinstance(result, dict) else None)
-                    or (raw if isinstance(result, str) else "")
+                    # FIX: use `result` (clean Python str), not `raw` (JSON with quotes)
+                    or (result if isinstance(result, str) else "")
                 )
             except json.JSONDecodeError:
                 text = raw
@@ -100,23 +113,15 @@ def format_image_text(name: str, occasion: str, is_custom: bool) -> str:
     if is_custom:
         return f"{name}, поздравляю!"
 
-    _display_map = {
-        "день рождения": "с Днём Рождения",
-        "свадьбу": "с Днём Свадьбы",
-        "рождение ребёнка": "с Новорожденным",
-        "8 марта": "с 8 Марта",
-        "завершение учёбы": "с Выпуском",
-    }
-
-    # Direct match on OCCASION_TEXT_MAP values (e.g. "день рождения")
-    display = _display_map.get(occasion.lower())
+    # Direct match on mapped occasion value (e.g. "день рождения")
+    display = _OCCASION_DISPLAY_MAP.get(occasion.lower())
     if display:
         return f"{name}, {display}!"
 
     # Fallback: try matching full emoji key from OCCASION_TEXT_MAP
     for emoji_key, val in OCCASION_TEXT_MAP.items():
         if emoji_key == occasion or val == occasion:
-            d = _display_map.get(val)
+            d = _OCCASION_DISPLAY_MAP.get(val)
             if d:
                 return f"{name}, {d}!"
 
@@ -147,10 +152,14 @@ def wrap_text(
 
 
 def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
-    """Draw centred text with drop-shadow onto image; return JPEG bytes."""
-    image = Image.open(BytesIO(img_bytes)).convert("RGB")
-    draw = ImageDraw.Draw(image)
+    """Draw centred text with semi-transparent drop-shadow; return JPEG bytes."""
+    # Convert to RGBA for alpha-compositing (shadow transparency)
+    image = Image.open(BytesIO(img_bytes)).convert("RGBA")
     width, height = image.size
+
+    # Draw on a transparent overlay so shadow is truly semi-transparent
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
 
     font_path = os.path.join(
         os.path.dirname(__file__),
@@ -171,11 +180,15 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
     y = (height - text_h) // 2
 
     shadow = max(2, font_size // 20)
+    # FIX: draw on RGBA overlay — alpha value (160) now works correctly
     draw.text((x + shadow, y + shadow), wrapped, font=font, fill=(0, 0, 0, 160))
-    draw.text((x, y), wrapped, font=font, fill=(255, 255, 255))
+    draw.text((x, y), wrapped, font=font, fill=(255, 255, 255, 255))
+
+    # Composite overlay onto original, convert back to RGB for JPEG
+    result_image = Image.alpha_composite(image, overlay).convert("RGB")
 
     output = BytesIO()
-    image.save(output, format="JPEG", quality=92)
+    result_image.save(output, format="JPEG", quality=92)
     return output.getvalue()
 
 
@@ -198,9 +211,10 @@ async def generate_postcard(
     )
 
     try:
-        is_custom = occasion.startswith("\u270f\ufe0f ")
+        # FIX: use CUSTOM_OCCASION_PREFIX constant instead of unicode escape
+        is_custom = occasion.startswith(CUSTOM_OCCASION_PREFIX)
         occasion_text = (
-            occasion.replace("\u270f\ufe0f ", "").strip()
+            occasion[len(CUSTOM_OCCASION_PREFIX):].strip()
             if is_custom
             else next(
                 (v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник"

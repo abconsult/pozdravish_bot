@@ -102,7 +102,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         
         postcards = get_postcards(user_id)
         if not postcards:
-            # User has no postcards saved yet
             await inline_query.answer(
                 results=[],
                 cache_time=1,
@@ -116,14 +115,11 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         for idx, pc in enumerate(postcards):
             caption_text = pc.get("caption", "")
             
-            # Form the final caption depending on if a name was typed
             if name:
-                # e.g., "Маша, от всей души поздравляю..."
                 first_letter = caption_text[0].lower() if caption_text else ""
                 rest = caption_text[1:] if len(caption_text) > 1 else ""
                 final_caption = f"{name}, {first_letter}{rest}"
             else:
-                # Just show how it will look
                 final_caption = f"..., {caption_text}"
             
             results.append(
@@ -251,7 +247,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             set_user_state(chat_id, st)
             logger.info("===> state saved successfully")
 
-            # Try to send the font preview image, fallback to text if missing
             preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts", "fonts_preview.jpg")
             try:
                 with open(preview_path, "rb") as f:
@@ -302,7 +297,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         st["text_mode"] = mode
         set_user_state(chat_id, st)
 
-        # Ask for text instructions based on mode
         if mode == "ai":
             prompt = "Напишите коротко, для кого это поздравление и какие есть пожелания (например: для мамы от сына, крепкого здоровья и счастья):"
         else:
@@ -380,12 +374,12 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         chat_id = message.chat.id
         st = get_user_state(chat_id)
         
-        text_input = message.text.strip()
+        # Guard: message.text is None for stickers, photos, voice, etc.
+        text_input = (message.text or "").strip()
         if not text_input:
             await message.answer("Пожалуйста, отправьте текст.")
             return
             
-        # Optional: General text length limit to prevent abuse
         if len(text_input) > 500:
             await message.answer("Текст слишком длинный. Пожалуйста, сделайте его короче (максимум 500 символов).")
             return
@@ -415,7 +409,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             set_user_state(chat_id, st)
 
             if st["text_mode"] == "custom":
-                # Custom mode: after name, ask for the greeting text
                 await message.answer(f"Напишите свой текст поздравления (максимум {MAX_CUSTOM_TEXT_LENGTH} символов):")
             else:
                 # AI mode: name captured, generate now
@@ -424,13 +417,14 @@ def register_handlers(dp: Dispatcher, bot: Bot):
                     "style": st["style"],
                     "font": st["font"],
                     "text_mode": "ai",
-                    "text_input": text_input,   # used for AI greeting generation
-                    "addressee": text_input,    # same name goes on image
+                    "text_input": text_input,
+                    "addressee": text_input,
                 }
                 set_user_state(chat_id, DEFAULT_STATE.copy())
                 credits = get_credits(chat_id)
                 if credits > 0:
-                    await generate_postcard(chat_id, message, payload)
+                    # FIX: was missing `bot` argument — caused TypeError → 'not handled' in logs
+                    await generate_postcard(chat_id, message, payload, bot)
                 else:
                     save_pending(chat_id, payload)
                     await message.answer(
@@ -453,7 +447,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             "style": st["style"],
             "font": st["font"],
             "text_mode": st["text_mode"],
-            "text_input": text_input,   # used for both AI hint or full custom text
+            "text_input": text_input,
         }
         
         set_user_state(chat_id, DEFAULT_STATE.copy())

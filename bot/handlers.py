@@ -212,7 +212,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         st["addressee"] = None
         set_user_state(chat_id, st)
 
-        preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts_preview.jpg")
+        preview_path = os.path.join(os.path.dirname(__file__), "..", "fonts", "fonts_preview.jpg")
         try:
             with open(preview_path, "rb") as f:
                 preview_bytes = f.read()

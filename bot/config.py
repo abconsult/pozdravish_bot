@@ -8,6 +8,7 @@ YUKASSA_TOKEN        = os.getenv("YUKASSA_PROVIDER_TOKEN", "")
 ADMIN_ID             = int(os.getenv("ADMIN_ID", "128247430"))
 
 FREE_CREDITS = 3
+MAX_CUSTOM_TEXT_LENGTH = 300  # Maximum characters allowed for custom greeting text
 
 PACKAGES = {
     3:  {"rub": 90, "amount": 9000, "label": "Пакет: 3 открытки"},

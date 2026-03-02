@@ -118,27 +118,27 @@ STYLE_PROMPT_MAP = {
 # ---------------------------------------------------------------------------
 TEMPLATE_POSTCARDS = [
     {
-        "id":      "birthday",
-        "title":   "🎂 День Рождения",
+        "id":      "march8-1",
+        "title":   "🌸 8 Марта",
         # ↓↓↓ вставьте реальный Telegram file_id вместо пустой строки
-        "file_id": "",
-        "caption": "поздравляю с Днём Рождения! "
+        "file_id": "AgACAgIAAxkBAAEbpi1ppVWfr2XkVKW2i5r2ds-avJDacgACchZrG3LgMUn5Hg7mjDXZmgEAAwIAA3kAAzoE",
+        "caption": "поздравляю с 8 марта! "
                    "Желаю здоровья, счастья и исполнения всех желаний! 🎂",
     },
     {
-        "id":      "march8",
+        "id":      "march8-2",
         "title":   "🌸 8 Марта",
         # ↓↓↓ вставьте реальный Telegram file_id вместо пустой строки
-        "file_id": "",
+        "file_id": "AgACAgIAAxkBAAEbpitppVUFkJgucd1FwERUrPOx47nJCAAC4xVrG7uiKEn0TppMJBbOkQEAAwIAA3gAAzoE",
         "caption": "поздравляю с прекрасным весенним праздником! "
                    "Желаю красоты, тепла и женского счастья! 🌸",
     },
     {
-        "id":      "universal",
-        "title":   "🎉 Поздравляю",
+        "id":      "march8-3",
+        "title":   "🌸 8 Марта",
         # ↓↓↓ вставьте реальный Telegram file_id вместо пустой строки
-        "file_id": "",
-        "caption": "поздравляю! "
+        "file_id": "AgACAgIAAxkBAAEbpjFppVYoHG-jczPagQswVVzkqxqjpAACdRZrG3LgMUkk8BGLB8x8UwEAAwIAA3kAAzoE",
+        "caption": "поздравляю с праздником Весны! "
                    "Пусть каждый день приносит радость и улыбки! 🎉",
     },
 ]

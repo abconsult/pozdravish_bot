@@ -38,7 +38,6 @@ _OCCASION_DISPLAY_MAP: dict[str, str] = {
     "завершение учёбы": "с Выпуском",
 }
 
-# Local caption fallback used when ProTalk text API times out
 _OCCASION_CAPTION_FALLBACK: dict[str, str] = {
     "день рождения": "желаю счастья, здоровья и всего самого лучшего!",
     "свадьбу": "желаю любви, гармонии и семейного счастья!",
@@ -129,7 +128,6 @@ async def safe_greeting(
     context: str | None,
     timeout_secs: float = 8.0,
 ) -> str:
-    """Call ProTalk text API with hard timeout; fall back to local text on timeout."""
     local_fallback = _OCCASION_CAPTION_FALLBACK.get(
         occasion_text.lower(),
         "поздравляю с праздником!",
@@ -151,7 +149,6 @@ async def safe_greeting(
 
 
 def format_image_text(name: str, occasion: str = "", is_custom: bool = False) -> str:
-    """Text drawn on the postcard image."""
     if not is_custom:
         display = _OCCASION_DISPLAY_MAP.get(occasion.lower())
         if display:
@@ -214,6 +211,19 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
     return output.getvalue()
 
 
+async def _keep_uploading(bot: Bot, chat_id: int, stop_event: asyncio.Event) -> None:
+    """Repeatedly send upload_photo action every 4s until stop_event is set."""
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
+        except asyncio.TimeoutError:
+            pass
+
+
 async def generate_postcard(
     chat_id: int, message: types.Message, payload: dict, bot: Bot
 ):
@@ -221,7 +231,7 @@ async def generate_postcard(
     style = payload["style"]
     font_name = payload.get("font", "Comfortaa")
     text_mode = payload.get("text_mode", "ai")
-    text_input = payload["text_input"]  # ai_context or custom text
+    text_input = payload["text_input"]
     addressee = payload.get("addressee", text_input)
 
     caption_for_db = text_input.strip()
@@ -229,6 +239,10 @@ async def generate_postcard(
     wait_msg = await message.answer(
         "⏳ Рисую открытку, это может занять до минуты. Подождите..."
     )
+
+    # Start "uploading photo" animation — refreshes every 4s automatically
+    stop_action = asyncio.Event()
+    action_task = asyncio.create_task(_keep_uploading(bot, chat_id, stop_action))
 
     try:
         is_custom = occasion.startswith(CUSTOM_OCCASION_PREFIX)
@@ -261,7 +275,6 @@ async def generate_postcard(
                 return await resp.read()
 
         if text_mode == "ai":
-            # Parallel: image + AI caption, caption capped at 8s
             image_bytes, caption_for_db = await asyncio.gather(
                 fetch_image(),
                 safe_greeting(
@@ -319,6 +332,13 @@ async def generate_postcard(
         )
 
     finally:
+        # Stop the upload_photo animation
+        stop_action.set()
+        action_task.cancel()
+        try:
+            await action_task
+        except asyncio.CancelledError:
+            pass
         try:
             await wait_msg.delete()
         except Exception:

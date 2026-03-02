@@ -156,6 +156,28 @@ def format_image_text(name: str, occasion: str = "", is_custom: bool = False) ->
     return f"{name}, поздравляю!"
 
 
+def _pick_text_colors(image: Image.Image) -> tuple[tuple, tuple]:
+    """Analyse centre 40% of image; return (text_color, stroke_color).
+
+    Uses W3C perceived-luminance formula.
+    Returns dark text + white stroke for light backgrounds,
+    white text + dark stroke for dark backgrounds.
+    """
+    w, h = image.size
+    margin = 0.3
+    crop = image.crop((
+        int(w * margin), int(h * margin),
+        int(w * (1 - margin)), int(h * (1 - margin)),
+    ))
+    r, g, b = crop.resize((1, 1), Image.LANCZOS).convert("RGB").getpixel((0, 0))
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    logger.info(f"IMAGE LUMINANCE: {luminance:.1f} (r={r} g={g} b={b})")
+    if luminance > 140:
+        return (30, 30, 30), (255, 255, 255)   # dark text, white stroke
+    else:
+        return (255, 255, 255), (30, 30, 30)   # white text, dark stroke
+
+
 def wrap_text(
     text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.Draw
 ) -> str:
@@ -179,8 +201,13 @@ def wrap_text(
 
 
 def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
+    """Draw centred text with adaptive color and stroke; return JPEG bytes."""
     image = Image.open(BytesIO(img_bytes)).convert("RGBA")
     width, height = image.size
+
+    # Pick contrasting colors based on background brightness
+    text_color, stroke_color = _pick_text_colors(image)
+
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
@@ -197,13 +224,24 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
         font = ImageFont.load_default()
 
     wrapped = wrap_text(text, font, int(width * 0.8), draw)
-    bbox = draw.textbbox((0, 0), wrapped, font=font)
-    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    x = (width - text_w) // 2
-    y = (height - text_h) // 2
-    shadow = max(2, font_size // 20)
-    draw.text((x + shadow, y + shadow), wrapped, font=font, fill=(0, 0, 0, 160))
-    draw.text((x, y), wrapped, font=font, fill=(255, 255, 255, 255))
+
+    # Centre the text block
+    bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (width - text_w) / 2
+    y = (height - text_h) / 2
+
+    # Draw with built-in stroke (Pillow ≥10) — clean outline on any background
+    draw.multiline_text(
+        (x, y),
+        wrapped,
+        font=font,
+        fill=text_color,
+        align="center",
+        stroke_width=2,
+        stroke_fill=stroke_color,
+    )
 
     result_image = Image.alpha_composite(image, overlay).convert("RGB")
     output = BytesIO()
@@ -212,7 +250,6 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
 
 
 async def _keep_uploading(bot: Bot, chat_id: int, stop_event: asyncio.Event) -> None:
-    """Repeatedly send upload_photo action every 4s until stop_event is set."""
     while not stop_event.is_set():
         try:
             await bot.send_chat_action(chat_id=chat_id, action="upload_photo")
@@ -240,7 +277,6 @@ async def generate_postcard(
         "⏳ Рисую открытку, это может занять до минуты. Подождите..."
     )
 
-    # Start "uploading photo" animation — refreshes every 4s automatically
     stop_action = asyncio.Event()
     action_task = asyncio.create_task(_keep_uploading(bot, chat_id, stop_action))
 
@@ -332,7 +368,6 @@ async def generate_postcard(
         )
 
     finally:
-        # Stop the upload_photo animation
         stop_action.set()
         action_task.cancel()
         try:

@@ -23,14 +23,9 @@ from bot.services import generate_postcard
 
 logger = logging.getLogger(__name__)
 
-# Referral config
 REFERRAL_BONUS_INVITER = 2
 REFERRAL_BONUS_INVITEE = 1
 
-# FSM state stored in Redis
-# text_mode: "ai" | "custom"
-# ai_context: пожелания/контекст для ИИ (на основе вопроса "для кого и какие пожелания")
-# addressee: имя адресата (будет запрошено отдельно)
 DEFAULT_STATE = {
     "occasion": None,
     "style": None,
@@ -104,13 +99,11 @@ def register_handlers(dp: Dispatcher, bot: Bot):
 
     @dp.inline_query()
     async def inline_query_handler(inline_query: types.InlineQuery):
-        """Show template cards (from config) + user's saved postcards."""
         try:
             name = inline_query.query.strip()
             user_id = inline_query.from_user.id
             logger.info(f"INLINE QUERY: user_id={user_id}, query='{name}'")
 
-            # 1) Template postcards
             results = []
             logger.info(f"INLINE: TEMPLATE_POSTCARDS count={len(TEMPLATE_POSTCARDS)}")
             for idx, tmpl in enumerate(TEMPLATE_POSTCARDS):
@@ -129,7 +122,6 @@ def register_handlers(dp: Dispatcher, bot: Bot):
                 )
                 logger.info(f"INLINE: added tmpl-{idx} ok")
 
-            # 2) User's saved postcards
             logger.info(f"INLINE: fetching postcards for user_id={user_id}")
             postcards = get_postcards(user_id)
             logger.info(f"INLINE: postcards count={len(postcards)}")
@@ -404,14 +396,13 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             await message.answer("Отлично! Теперь выберите стиль:", reply_markup=build_style_keyboard())
             return
 
-        # 2. Проверяем, что все параметры для генерации выбраны
+        # 2. Проверяем, что все параметры выбраны
         if not st.get("occasion") or not st.get("style") or not st.get("font") or not st.get("text_mode"):
             await message.answer("Давайте начнём заново: выберите повод.", reply_markup=build_occasion_keyboard())
             return
 
-        # 3а. Режим AI: сначала просим контекст, потом имя адресата
+        # 3а. Режим AI: получаем контекст ("для кого и какие пожелания")
         if st["text_mode"] == "ai" and st.get("ai_context") is None:
-            # Текущий ввод — это как раз "для кого и какие пожелания"
             if len(text_input) > 300:
                 await message.answer("Слишком длинное описание. Уложитесь, пожалуйста, в 300 символов.")
                 return
@@ -420,7 +411,20 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             await message.answer("Теперь напишите <b>имя адресата</b> (как его вывести на открытке):", parse_mode="HTML")
             return
 
-        # 3б. Ждём имя адресата (и для AI, и для custom режима)
+        # 3б. Режим Custom: получаем текст поздравления (xранится в ai_context)
+        if st["text_mode"] == "custom" and st.get("ai_context") is None:
+            if len(text_input) > MAX_CUSTOM_TEXT_LENGTH:
+                await message.answer(
+                    f"Текст слишком длинный ({len(text_input)} символов). "
+                    f"Пожалуйста, уложитесь в {MAX_CUSTOM_TEXT_LENGTH} символов."
+                )
+                return
+            st["ai_context"] = text_input
+            set_user_state(chat_id, st)
+            await message.answer("Теперь напишите <b>имя адресата</b> (как его вывести на открытке):", parse_mode="HTML")
+            return
+
+        # 4. Ждём имя адресата (для обоих режимов)
         if st.get("addressee") is None:
             if len(text_input) > 50:
                 await message.answer("Имя адресата слишком длинное (макс. 50 символов).")
@@ -428,47 +432,13 @@ def register_handlers(dp: Dispatcher, bot: Bot):
             st["addressee"] = text_input
             set_user_state(chat_id, st)
 
-            if st["text_mode"] == "custom":
-                await message.answer(f"Напишите свой текст поздравления (макс. {MAX_CUSTOM_TEXT_LENGTH} символов):")
-            else:
-                # AI: у нас уже есть и контекст, и имя — запускаем генерацию
-                payload = {
-                    "occasion": st["occasion"],
-                    "style": st["style"],
-                    "font": st["font"],
-                    "text_mode": "ai",
-                    "text_input": st["ai_context"],  # контекст для ИИ
-                    "addressee": text_input,
-                }
-                set_user_state(chat_id, DEFAULT_STATE.copy())
-                credits = get_credits(chat_id)
-                if credits > 0:
-                    await generate_postcard(chat_id, message, payload, bot)
-                else:
-                    save_pending(chat_id, payload)
-                    await message.answer(
-                        "У вас закончились бесплатные открытки.\n"
-                        "Выберите пакет для продолжения или пригласите друга через /referral:",
-                        reply_markup=build_packages_keyboard(),
-                    )
-            return
-
-        # 4. Custom-режим: пользователь прислал текст поздравления после имени
-        if st["text_mode"] == "custom":
-            if len(text_input) > MAX_CUSTOM_TEXT_LENGTH:
-                await message.answer(
-                    f"Текст слишком длинный ({len(text_input)} символов). "
-                    f"Пожалуйста, уложитесь в {MAX_CUSTOM_TEXT_LENGTH} символов.",
-                )
-                return
-
             payload = {
                 "occasion": st["occasion"],
                 "style": st["style"],
                 "font": st["font"],
-                "text_mode": "custom",
-                "text_input": text_input,  # полный текст поздравления
-                "addressee": st.get("addressee"),
+                "text_mode": st["text_mode"],
+                "text_input": st["ai_context"],  # для ai — контекст, для custom — текст
+                "addressee": text_input,
             }
             set_user_state(chat_id, DEFAULT_STATE.copy())
             credits = get_credits(chat_id)

@@ -63,7 +63,7 @@ async def fetch_with_retry(
             logger.warning(f"Attempt {attempt + 1}: exception: {e}")
         if attempt < retries - 1:
             await asyncio.sleep(delay)
-    raise Exception(f"Failed to fetch after {retries} attempts: {url}")
+    raise Exception(f"Failed to fetch after {retries} attempts")
 
 
 async def get_greeting_text_from_protalk(
@@ -157,12 +157,7 @@ def format_image_text(name: str, occasion: str = "", is_custom: bool = False) ->
 
 
 def _pick_text_colors(image: Image.Image) -> tuple[tuple, tuple]:
-    """Analyse centre 40% of image; return (text_color, stroke_color).
-
-    Uses W3C perceived-luminance formula.
-    Returns dark text + white stroke for light backgrounds,
-    white text + dark stroke for dark backgrounds.
-    """
+    """Analyse centre 40% of image; return (text_color, stroke_color)."""
     w, h = image.size
     margin = 0.3
     crop = image.crop((
@@ -173,9 +168,9 @@ def _pick_text_colors(image: Image.Image) -> tuple[tuple, tuple]:
     luminance = 0.299 * r + 0.587 * g + 0.114 * b
     logger.info(f"IMAGE LUMINANCE: {luminance:.1f} (r={r} g={g} b={b})")
     if luminance > 140:
-        return (30, 30, 30), (255, 255, 255)   # dark text, white stroke
+        return (30, 30, 30), (255, 255, 255)
     else:
-        return (255, 255, 255), (30, 30, 30)   # white text, dark stroke
+        return (255, 255, 255), (30, 30, 30)
 
 
 def wrap_text(
@@ -201,11 +196,9 @@ def wrap_text(
 
 
 def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
-    """Draw centred text with adaptive color and stroke; return JPEG bytes."""
     image = Image.open(BytesIO(img_bytes)).convert("RGBA")
     width, height = image.size
 
-    # Pick contrasting colors based on background brightness
     text_color, stroke_color = _pick_text_colors(image)
 
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
@@ -225,14 +218,12 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
 
     wrapped = wrap_text(text, font, int(width * 0.8), draw)
 
-    # Centre the text block
     bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
     x = (width - text_w) / 2
     y = (height - text_h) / 2
 
-    # Draw with built-in stroke (Pillow ≥10) — clean outline on any background
     draw.multiline_text(
         (x, y),
         wrapped,
@@ -259,6 +250,23 @@ async def _keep_uploading(bot: Bot, chat_id: int, stop_event: asyncio.Event) -> 
             await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
         except asyncio.TimeoutError:
             pass
+
+
+def _friendly_error(e: Exception) -> str:
+    """Return a short user-friendly error description without internal URLs or paths."""
+    msg = str(e)
+    # Hide any URL (starts with http)
+    if "http" in msg:
+        return "Нейросеть не ответила вовремя"
+    # Timeout errors
+    if "timeout" in msg.lower() or "TimeoutError" in type(e).__name__:
+        return "Превышен лимит ожидания"
+    # Connection errors
+    if "connect" in msg.lower() or "ClientConnector" in type(e).__name__:
+        return "Ошибка соединения"
+    # Generic fallback — show short message without URLs
+    clean = msg.split("\n")[0][:80]
+    return clean if clean else "Неизвестная ошибка"
 
 
 async def generate_postcard(
@@ -355,9 +363,10 @@ async def generate_postcard(
 
     except Exception as e:
         logger.error(f"generate_postcard error: {e}", exc_info=True)
+        friendly = _friendly_error(e)
         await message.answer(
-            f"\U0001f614 Произошла ошибка при связи с нейросетью. Серверы сейчас перегружены.\n"
-            f"<b>Код ошибки:</b> {str(e)[:100]}\n"
+            f"\U0001f614 Нейросеть сейчас перегружена — не удалось сгенерировать открытку.\n"
+            f"<b>Причина:</b> {friendly}\n"
             f"Ваш кредит <b>не списан</b>. Попробуйте ещё раз через пару минут.",
             parse_mode="HTML",
         )

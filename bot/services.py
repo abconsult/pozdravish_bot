@@ -3,6 +3,7 @@ import asyncio
 import json
 import urllib.parse
 import logging
+import re
 from io import BytesIO
 
 import aiohttp
@@ -44,6 +45,10 @@ _OCCASION_CAPTION_FALLBACK: dict[str, str] = {
     "рождение ребёнка": "пусть малыш радует и растёт здоровым и любимым!",
     "8 марта": "желаю радости, тепла и весны в душе!",
     "завершение учёбы": "желаю яркого будущего и больших успехов!",
+}
+
+_FONT_SIZE_MULTIPLIER: dict[str, float] = {
+    "Caveat": 1.22,
 }
 
 
@@ -152,6 +157,7 @@ def format_image_text(name: str, occasion: str = "", is_custom: bool = False) ->
     if not is_custom:
         display = _OCCASION_DISPLAY_MAP.get(occasion.lower())
         if display:
+            display = display.replace(" ", "\u00a0")
             return f"{name}, {display}!"
     return f"{name}, поздравляю!"
 
@@ -178,7 +184,8 @@ def wrap_text(
 ) -> str:
     lines = []
     for block in text.split("\n"):
-        words = block.split()
+        # Split only by regular spaces so non-breaking spaces stay in one token.
+        words = [word for word in block.split(" ") if word]
         if not words:
             lines.append("")
             continue
@@ -195,6 +202,70 @@ def wrap_text(
     return "\n".join(lines)
 
 
+def _mojibake_score(text: str) -> int:
+    # Typical mojibake chunks for UTF-8 decoded as cp1251.
+    return len(re.findall(r"[РС][\u0400-\u04FF]", text)) + text.count("�")
+
+
+def _normalize_cyrillic_text(text: str) -> str:
+    cleaned = (text or "").replace("\r\n", "\n").strip()
+    if not cleaned:
+        return ""
+
+    # Fast path: already readable enough, skip risky recoding.
+    if _mojibake_score(cleaned) == 0:
+        return cleaned
+
+    for codec in ("cp1251", "koi8_r"):
+        try:
+            fixed = cleaned.encode(codec).decode("utf-8")
+        except UnicodeError:
+            continue
+        if fixed and _mojibake_score(fixed) < _mojibake_score(cleaned):
+            return fixed
+    return cleaned
+
+
+def _load_font(font_path: str, fallback_path: str, size: int) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(font_path, size)
+    except Exception:
+        logger.warning(f"Font not found or broken: {font_path}, fallback to {fallback_path}")
+        try:
+            return ImageFont.truetype(fallback_path, size)
+        except Exception:
+            logger.warning("Fallback font not found, using Pillow default bitmap font")
+            return ImageFont.load_default()
+
+
+def _fit_font_and_wrap(
+    draw: ImageDraw.Draw,
+    text: str,
+    primary_font_path: str,
+    fallback_font_path: str,
+    font_name: str,
+    width: int,
+    height: int,
+) -> tuple[ImageFont.FreeTypeFont, str]:
+    multiplier = _FONT_SIZE_MULTIPLIER.get(font_name, 1.0)
+    start_size = max(36, int(height * 0.16 * multiplier))
+    min_size = 28
+    max_width = int(width * 0.84)
+    max_height = int(height * 0.48)
+
+    for size in range(start_size, min_size - 1, -2):
+        font = _load_font(primary_font_path, fallback_font_path, size)
+        wrapped = wrap_text(text, font, max_width, draw)
+        bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        if text_w <= max_width and text_h <= max_height:
+            return font, wrapped
+
+    font = _load_font(primary_font_path, fallback_font_path, min_size)
+    return font, wrap_text(text, font, max_width, draw)
+
+
 def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
     image = Image.open(BytesIO(img_bytes)).convert("RGBA")
     width, height = image.size
@@ -204,19 +275,26 @@ def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
 
-    font_path = os.path.join(
+    requested_font_path = os.path.join(
         os.path.dirname(__file__),
         "..",
         FONTS_FILES.get(font_name, FONTS_FILES["Comfortaa"]),
     )
-    font_size = max(24, height // 10)
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except Exception:
-        logger.warning(f"Font not found: {font_path}, using default")
-        font = ImageFont.load_default()
-
-    wrapped = wrap_text(text, font, int(width * 0.8), draw)
+    fallback_font_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        FONTS_FILES["Comfortaa"],
+    )
+    safe_text = _normalize_cyrillic_text(text)
+    font, wrapped = _fit_font_and_wrap(
+        draw=draw,
+        text=safe_text,
+        primary_font_path=requested_font_path,
+        fallback_font_path=fallback_font_path,
+        font_name=font_name,
+        width=width,
+        height=height,
+    )
 
     bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
     text_w = bbox[2] - bbox[0]

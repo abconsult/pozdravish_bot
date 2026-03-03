@@ -28,6 +28,10 @@ def template_file_id_key(template_id: str) -> str:
     """Global Redis key for a template's Telegram file_id."""
     return f"template:file_id:{template_id}"
 
+def pending_image_key(task_id: str) -> str:
+    """Redis key for storing pending image generation task data."""
+    return f"pending_image:{task_id}"
+
 
 # ---------------------------------------------------------------------------
 # Credits
@@ -207,3 +211,43 @@ def templates_are_ready() -> bool:
     fall back to the switch_pm prompt.
     """
     return all(get_all_template_file_ids().values())
+
+
+# ---------------------------------------------------------------------------
+# Pending image generation tasks (async callback workflow)
+# ---------------------------------------------------------------------------
+
+def save_pending_image_task(task_id: str, data: dict, ttl: int = 300) -> None:
+    """Save pending image generation task data.
+    
+    Args:
+        task_id: Kie.ai task ID
+        data: Dictionary containing:
+            - chat_id: Telegram chat ID
+            - message_id: ID of the waiting message
+            - payload: Generation parameters (occasion, style, font, etc.)
+            - caption_for_db: Generated or user-provided caption
+        ttl: Time to live in seconds (default 5 minutes)
+    """
+    key = pending_image_key(task_id)
+    kv.setex(key, ttl, json.dumps(data))
+
+
+def get_pending_image_task(task_id: str) -> dict | None:
+    """Retrieve and delete pending image generation task data.
+    
+    Returns:
+        Dictionary with task data or None if not found
+    """
+    key = pending_image_key(task_id)
+    val = kv.get(key)
+    if val:
+        kv.delete(key)
+        if isinstance(val, str):
+            try:
+                return json.loads(val)
+            except Exception:
+                return None
+        if isinstance(val, dict):
+            return val
+    return None

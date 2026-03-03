@@ -1,250 +1,389 @@
-import io
 import os
-import uuid
-import json
-import aiohttp
 import asyncio
+import json
 import urllib.parse
 import logging
+from io import BytesIO
+
+import aiohttp
 from PIL import Image, ImageDraw, ImageFont
-from aiogram import types
+from aiogram import Bot, types
 from aiogram.types import BufferedInputFile
 
 from bot.config import (
-    PROTALK_FUNCTION_ID, PROTALK_BOT_ID, PROTALK_TOKEN, 
-    OCCASION_TEXT_MAP, STYLE_PROMPT_MAP, FONTS_FILES
+    PROTALK_BOT_ID,
+    PROTALK_TOKEN,
+    PROTALK_FUNCTION_ID,
+    STYLE_PROMPT_MAP,
+    FONTS_FILES,
+    OCCASION_TEXT_MAP,
 )
-from bot.database import consume_credit, set_user_state, record_generation
-from bot.keyboards import build_occasion_keyboard
+from bot.database import (
+    increment_generations,
+    get_credits,
+    add_credits,
+    set_user_state,
+    save_postcard,
+)
 
 logger = logging.getLogger(__name__)
 
+CUSTOM_OCCASION_PREFIX = "✏️ "
 
-async def get_greeting_text_from_protalk(name: str, occasion: str) -> str:
-    meta_prompt = (
-        f"Напиши короткое красивое поздравление на русском языке. "
-        f"Получатель: {name}. Повод: {occasion}. "
-        f"Стиль: тёплый, искренний, 2-3 предложения максимум. "
-        f"Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений. Не используй списки или нумерацию."
+_OCCASION_DISPLAY_MAP: dict[str, str] = {
+    "день рождения": "с Днём Рождения",
+    "свадьбу": "с Днём Свадьбы",
+    "рождение ребёнка": "с Новорожденным",
+    "8 марта": "с 8 Марта",
+    "завершение учёбы": "с Выпуском",
+}
+
+_OCCASION_CAPTION_FALLBACK: dict[str, str] = {
+    "день рождения": "желаю счастья, здоровья и всего самого лучшего!",
+    "свадьбу": "желаю любви, гармонии и семейного счастья!",
+    "рождение ребёнка": "пусть малыш радует и растёт здоровым и любимым!",
+    "8 марта": "желаю радости, тепла и весны в душе!",
+    "завершение учёбы": "желаю яркого будущего и больших успехов!",
+}
+
+
+async def fetch_with_retry(
+    url: str,
+    session: aiohttp.ClientSession,
+    retries: int = 3,
+    delay: int = 2,
+) -> aiohttp.ClientResponse:
+    for attempt in range(retries):
+        try:
+            resp = await session.get(url)
+            if resp.status == 200:
+                return resp
+            logger.warning(f"Attempt {attempt + 1}: status {resp.status}")
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1}: exception: {e}")
+        if attempt < retries - 1:
+            await asyncio.sleep(delay)
+    raise Exception(f"Failed to fetch after {retries} attempts")
+
+
+async def get_greeting_text_from_protalk(
+    addressee: str,
+    occasion: str,
+    context: str | None = None,
+    fallback: str = "Поздравляю!",
+) -> str:
+    base_prompt = (
+        "Напиши короткое красивое поздравление на русском языке. "
+        f"Получатель: {addressee}. "
+        f"Повод: {occasion}. "
+    )
+    if context:
+        base_prompt += f"Дополнительные пожелания: {context}. "
+    base_prompt += (
+        "Стиль: тёплый, искренний, 2-3 предложения максимум. "
+        "Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
     )
 
-    bot_chat_id = f"ask{uuid.uuid4().hex[:8]}"
-    send_url = f"https://api.pro-talk.ru/api/v1.0/ask/{PROTALK_TOKEN}"
+    protalk_url = (
+        "https://api.pro-talk.ru/api/v1.0/run_function_get"
+        f"?function_id={PROTALK_FUNCTION_ID}"
+        f"&bot_id={PROTALK_BOT_ID}"
+        f"&bot_token={PROTALK_TOKEN}"
+        f"&prompt={urllib.parse.quote(base_prompt)}"
+        f"&output=text"
+    )
 
-    payload_send = {
-        "bot_id": int(PROTALK_BOT_ID),
-        "chat_id": bot_chat_id,
-        "message": meta_prompt
-    }
-
-    fallback = f"С праздником, {name}! 🎉"
-
-    logger.info(f"Sending text generation request to ProTalk: URL={send_url}, payload={json.dumps(payload_send, ensure_ascii=False)}")
-
+    logger.info(f"PROTALK TEXT: calling for '{addressee}' / '{occasion}'")
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(send_url, json=payload_send) as resp:
-                if resp.status != 200:
-                    logger.error(f"ProTalk /ask error: HTTP {resp.status}")
-                    return fallback
-                
-                data = await resp.json()
-                logger.info(f"ProTalk text generation response: {json.dumps(data, ensure_ascii=False)}")
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            resp = await fetch_with_retry(protalk_url, session, retries=1, delay=0)
+            raw = await resp.text()
 
-                text = data.get("done", "")
-                if text:
-                    return text.strip()
-                else:
-                    logger.warning("ProTalk returned empty 'done' message in synchronous call")
-                    return fallback
+        logger.info(f"PROTALK TEXT: raw='{raw[:200]}'")
+
+        try:
+            result = json.loads(raw)
+            text = (
+                (result.get("result") if isinstance(result, dict) else None)
+                or (result.get("text") if isinstance(result, dict) else None)
+                or (result.get("response") if isinstance(result, dict) else None)
+                or (result if isinstance(result, str) else "")
+            )
+        except json.JSONDecodeError:
+            text = raw
+
+        final = (text or "").strip() or fallback
+        logger.info(f"PROTALK TEXT: result='{final[:80]}'")
+        return final
 
     except Exception as e:
-        logger.error(f"Error fetching greeting text: {e}", exc_info=True)
+        logger.info(f"PROTALK TEXT ERROR: {type(e).__name__}: {e}")
         return fallback
 
 
-def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.ImageDraw) -> str:
-    """Wrap text to fit within max_width based on the given font."""
+async def safe_greeting(
+    addressee: str,
+    occasion_text: str,
+    context: str | None,
+    timeout_secs: float = 8.0,
+) -> str:
+    local_fallback = _OCCASION_CAPTION_FALLBACK.get(
+        occasion_text.lower(),
+        "поздравляю с праздником!",
+    )
+    try:
+        result = await asyncio.wait_for(
+            get_greeting_text_from_protalk(
+                addressee=addressee,
+                occasion=occasion_text,
+                context=context,
+                fallback=local_fallback,
+            ),
+            timeout=timeout_secs,
+        )
+        return result
+    except asyncio.TimeoutError:
+        logger.info(f"PROTALK TEXT: timeout {timeout_secs}s — using local fallback")
+        return local_fallback
+
+
+def format_image_text(name: str, occasion: str = "", is_custom: bool = False) -> str:
+    if not is_custom:
+        display = _OCCASION_DISPLAY_MAP.get(occasion.lower())
+        if display:
+            return f"{name}, {display}!"
+    return f"{name}, поздравляю!"
+
+
+def _pick_text_colors(image: Image.Image) -> tuple[tuple, tuple]:
+    """Analyse centre 40% of image; return (text_color, stroke_color)."""
+    w, h = image.size
+    margin = 0.3
+    crop = image.crop((
+        int(w * margin), int(h * margin),
+        int(w * (1 - margin)), int(h * (1 - margin)),
+    ))
+    r, g, b = crop.resize((1, 1), Image.LANCZOS).convert("RGB").getpixel((0, 0))
+    luminance = 0.299 * r + 0.587 * g + 0.114 * b
+    logger.info(f"IMAGE LUMINANCE: {luminance:.1f} (r={r} g={g} b={b})")
+    if luminance > 140:
+        return (30, 30, 30), (255, 255, 255)
+    else:
+        return (255, 255, 255), (30, 30, 30)
+
+
+def wrap_text(
+    text: str, font: ImageFont.FreeTypeFont, max_width: int, draw: ImageDraw.Draw
+) -> str:
     lines = []
-    for paragraph in text.split('\n'):
-        words = paragraph.split()
+    for block in text.split("\n"):
+        words = block.split()
         if not words:
             lines.append("")
             continue
-            
         current_line = words[0]
         for word in words[1:]:
             test_line = current_line + " " + word
             bbox = draw.textbbox((0, 0), test_line, font=font)
-            width = bbox[2] - bbox[0]
-            
-            if width <= max_width:
+            if bbox[2] - bbox[0] <= max_width:
                 current_line = test_line
             else:
                 lines.append(current_line)
                 current_line = word
         lines.append(current_line)
-        
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
-def format_image_text(addressee: str, occasion_text: str, is_custom: bool) -> str:
-    """Format the short greeting for the image based on occasion."""
-    if is_custom:
-        return f"{addressee}, поздравляю!"
-    elif occasion_text == "день рождения":
-        return f"{addressee}, с Днём Рождения!"
-    elif occasion_text == "свадьбу":
-        return f"{addressee}, с Днём Свадьбы!"
-    elif occasion_text == "рождение ребёнка":
-        return f"{addressee}, с новорожденным!"
-    elif occasion_text == "8 марта":
-        return f"{addressee}, с днём 8 марта!"
-    elif occasion_text == "завершение учёбы":
-        return f"{addressee}, с выпускным!"
-    else:
-        return f"{addressee}, поздравляю!"
+def apply_text_to_image(img_bytes: bytes, text: str, font_name: str) -> bytes:
+    image = Image.open(BytesIO(img_bytes)).convert("RGBA")
+    width, height = image.size
+
+    text_color, stroke_color = _pick_text_colors(image)
+
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    font_path = os.path.join(
+        os.path.dirname(__file__),
+        "..",
+        FONTS_FILES.get(font_name, FONTS_FILES["Comfortaa"]),
+    )
+    font_size = max(24, height // 10)
+    try:
+        font = ImageFont.truetype(font_path, font_size)
+    except Exception:
+        logger.warning(f"Font not found: {font_path}, using default")
+        font = ImageFont.load_default()
+
+    wrapped = wrap_text(text, font, int(width * 0.8), draw)
+
+    bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (width - text_w) / 2
+    y = (height - text_h) / 2
+
+    draw.multiline_text(
+        (x, y),
+        wrapped,
+        font=font,
+        fill=text_color,
+        align="center",
+        stroke_width=2,
+        stroke_fill=stroke_color,
+    )
+
+    result_image = Image.alpha_composite(image, overlay).convert("RGB")
+    output = BytesIO()
+    result_image.save(output, format="JPEG", quality=92)
+    return output.getvalue()
 
 
-async def generate_postcard(chat_id: int, message: types.Message, payload: dict):
+async def _keep_uploading(bot: Bot, chat_id: int, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action="upload_photo")
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=4.0)
+        except asyncio.TimeoutError:
+            pass
+
+
+def _friendly_error(e: Exception) -> str:
+    """Return a short user-friendly error description without internal URLs or paths."""
+    msg = str(e)
+    # Hide any URL (starts with http)
+    if "http" in msg:
+        return "Нейросеть не ответила вовремя"
+    # Timeout errors
+    if "timeout" in msg.lower() or "TimeoutError" in type(e).__name__:
+        return "Превышен лимит ожидания"
+    # Connection errors
+    if "connect" in msg.lower() or "ClientConnector" in type(e).__name__:
+        return "Ошибка соединения"
+    # Generic fallback — show short message without URLs
+    clean = msg.split("\n")[0][:80]
+    return clean if clean else "Неизвестная ошибка"
+
+
+async def generate_postcard(
+    chat_id: int, message: types.Message, payload: dict, bot: Bot
+):
     occasion = payload["occasion"]
     style = payload["style"]
+    font_name = payload.get("font", "Comfortaa")
     text_mode = payload.get("text_mode", "ai")
     text_input = payload["text_input"]
-    addressee = payload.get("addressee") or text_input
+    addressee = payload.get("addressee", text_input)
 
-    wait_msg = await message.answer("⏳ Рисую открытку, подождите...")
+    caption_for_db = text_input.strip()
 
-    is_custom = occasion.startswith("✏️ ")
-    if is_custom:
-        occasion_text = occasion.replace("✏️ ", "").strip()
-    else:
-        occasion_text = OCCASION_TEXT_MAP.get(occasion) or OCCASION_TEXT_MAP.get(occasion.strip())
-        if not occasion_text:
-             for key, val in OCCASION_TEXT_MAP.items():
-                 if key in occasion or occasion in key or key.split(" ")[-1] in occasion:
-                     occasion_text = val
-                     break
-        if not occasion_text:
-             logger.error(f"Failed to map occasion exact match: '{occasion}'. Using default.")
-             occasion_text = "праздник"
-
-    prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
-
-    # For custom occasions, use a neutral theme so the model doesn't try to
-    # render the custom text as glyphs/signs on the generated background.
-    occasion_for_prompt = "праздник" if is_custom else occasion_text
-    image_prompt = prompt_template.format(occasion=occasion_for_prompt)
-    image_prompt += (
-        " ABSOLUTELY NO TEXT, NO TYPOGRAPHY, no letters, no words, no numbers,"
-        " no symbols, no signage, no labels, no logos, no watermark, no signature,"
-        " no stamps, no captions, no calligraphy, no handwriting, no headlines."
-        " Blank clean center, clean background."
+    wait_msg = await message.answer(
+        "⏳ Рисую открытку, это может занять до минуты. Подождите..."
     )
 
-    image_url = (
-        "https://api.pro-talk.ru/api/v1.0/run_function_get"
-        f"?function_id={PROTALK_FUNCTION_ID}"
-        f"&bot_id={PROTALK_BOT_ID}"
-        f"&bot_token={PROTALK_TOKEN}"
-        f"&prompt={urllib.parse.quote(image_prompt)}"
-        f"&output=image"
-    )
-
-    logger.info(f"Sending image generation request to ProTalk: prompt='{image_prompt}'")
+    stop_action = asyncio.Event()
+    action_task = asyncio.create_task(_keep_uploading(bot, chat_id, stop_action))
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async def fetch_image():
-                async with session.get(image_url) as resp:
-                    if resp.status != 200:
-                        raise Exception(f"Image API Error: HTTP {resp.status}")
-                    return await resp.read()
-
-            if text_mode == "ai":
-                image_bytes, caption_text = await asyncio.gather(
-                    fetch_image(),
-                    get_greeting_text_from_protalk(text_input, occasion_text),
-                )
-            else:
-                image_bytes = await fetch_image()
-                caption_text = text_input.strip()[:1024]
-
-        img = Image.open(io.BytesIO(image_bytes))
-        draw = ImageDraw.Draw(img)
-
-        # Short occasion-based greeting on the image
-        text_to_draw = format_image_text(addressee, occasion_text, is_custom)
-
-        chosen_font_name = payload.get("font", "Lobster")
-        font_filename = FONTS_FILES.get(chosen_font_name, "Lobster-Regular.ttf")
-
-        max_text_width = int(img.width * 0.8)
-        max_text_height = int(img.height * 0.8)
-
-        font_size = 100
-        try:
-            font_path = os.path.join(os.path.dirname(__file__), "..", font_filename)
-            font = ImageFont.truetype(font_path, font_size)
-
-            wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
-
-            while True:
-                bbox = draw.multiline_textbbox((0, 0), wrapped_text, font=font, align="center")
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                
-                if (text_width <= max_text_width and text_height <= max_text_height) or font_size <= 20:
-                    break
-                
-                font_size -= 5
-                font = ImageFont.truetype(font_path, font_size)
-                wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
-                
-            text_to_draw = wrapped_text
-
-        except IOError:
-            font = ImageFont.load_default()
-            wrapped_text = wrap_text(text_to_draw, font, max_text_width, draw)
-            text_to_draw = wrapped_text
-
-        bbox = draw.multiline_textbbox((0, 0), text_to_draw, font=font, align="center")
-        text_width  = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = (img.width  - text_width)  / 2
-        y = (img.height - text_height) / 2
-
-        text_color = (200, 30, 30)
-        if occasion_text in ("рождение ребёнка", "8 марта"):
-            text_color = (219, 112, 147)
-        elif occasion_text == "свадьбу":
-            text_color = (218, 165, 32)
-        elif is_custom:
-            text_color = (50, 100, 200)
-
-        draw.multiline_text((x + 2, y + 2), text_to_draw, font=font, fill=(50, 50, 50), align="center")
-        draw.multiline_text((x, y),          text_to_draw, font=font, fill=text_color,  align="center")
-
-        output_buffer = io.BytesIO()
-        img.save(output_buffer, format="JPEG", quality=90)
-        final_image_bytes = output_buffer.getvalue()
-
-        photo = BufferedInputFile(final_image_bytes, filename="postcard.jpg")
-
-        await message.answer_photo(photo=photo, caption=caption_text)
-
-        left = consume_credit(chat_id)
-        record_generation()
-
-        await message.answer(
-            f"✅ Списан 1 кредит. Осталось: {left}\n\n"
-            f"Хотите ещё одну? Выберите повод:",
-            reply_markup=build_occasion_keyboard(),
+        is_custom = occasion.startswith(CUSTOM_OCCASION_PREFIX)
+        occasion_text = (
+            occasion[len(CUSTOM_OCCASION_PREFIX):].strip()
+            if is_custom
+            else next(
+                (v for k, v in OCCASION_TEXT_MAP.items() if k in occasion), "праздник"
+            )
         )
-        set_user_state(chat_id, {"occasion": None, "style": None, "font": None, "text_mode": None, "addressee": None})
+
+        logger.info(f"POSTCARD: mode={text_mode} occasion='{occasion_text}' addressee='{addressee}'")
+
+        prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
+        image_prompt = prompt_template.format(occasion=occasion_text)
+        image_url = (
+            "https://api.pro-talk.ru/api/v1.0/run_function_get"
+            f"?function_id={PROTALK_FUNCTION_ID}"
+            f"&bot_id={PROTALK_BOT_ID}"
+            f"&bot_token={PROTALK_TOKEN}"
+            f"&prompt={urllib.parse.quote(image_prompt)}"
+            f"&output=image"
+        )
+
+        timeout_img = aiohttp.ClientTimeout(total=25)
+
+        async def fetch_image() -> bytes:
+            async with aiohttp.ClientSession(timeout=timeout_img) as session:
+                resp = await fetch_with_retry(image_url, session, retries=3, delay=3)
+                return await resp.read()
+
+        if text_mode == "ai":
+            image_bytes, caption_for_db = await asyncio.gather(
+                fetch_image(),
+                safe_greeting(
+                    addressee=addressee,
+                    occasion_text=occasion_text,
+                    context=text_input,
+                    timeout_secs=8.0,
+                ),
+            )
+            logger.info(f"POSTCARD: caption='{caption_for_db[:80]}'")
+        else:
+            image_bytes = await fetch_image()
+            caption_for_db = text_input.strip()
+
+        text_to_draw = format_image_text(addressee, occasion_text, is_custom)
+        logger.info(f"POSTCARD: text_to_draw='{text_to_draw}'")
+        final_img_bytes = apply_text_to_image(image_bytes, text_to_draw, font_name)
+
+        pm_caption = (
+            f"..., {caption_for_db}\n\n"
+            f"\U0001f4a1 <b>Открытка готова!</b>\n"
+            f"Чтобы отправить её с именем, напишите в любом чате:\n"
+            f"<code>@pozdravish_bot Имя</code>"
+        )
+
+        msg = await message.answer_photo(
+            photo=BufferedInputFile(final_img_bytes, filename="postcard.jpg"),
+            caption=pm_caption,
+            parse_mode="HTML",
+        )
+
+        if msg and msg.photo:
+            save_postcard(chat_id, msg.photo[-1].file_id, caption_for_db)
+
+        increment_generations()
+        add_credits(chat_id, -1)
+
+        credits = get_credits(chat_id)
+        await message.answer(
+            f"Осталось бесплатных открыток: <b>{credits}</b>", parse_mode="HTML"
+        )
 
     except Exception as e:
-        logger.error(f"Error in generate_postcard: {e}", exc_info=True)
-        await message.answer("❌ Ошибка при генерации. Попробуйте ещё раз.")
+        logger.error(f"generate_postcard error: {e}", exc_info=True)
+        friendly = _friendly_error(e)
+        await message.answer(
+            f"\U0001f614 Нейросеть сейчас перегружена — не удалось сгенерировать открытку.\n"
+            f"<b>Причина:</b> {friendly}\n"
+            f"Ваш кредит <b>не списан</b>. Попробуйте ещё раз через пару минут.",
+            parse_mode="HTML",
+        )
+        set_user_state(
+            chat_id,
+            {"occasion": None, "style": None, "font": None, "text_mode": None,
+             "ai_context": None, "addressee": None},
+        )
+
     finally:
-        await wait_msg.delete()
+        stop_action.set()
+        action_task.cancel()
+        try:
+            await action_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass

@@ -295,7 +295,7 @@ def register_handlers(dp: Dispatcher, bot: Bot):
         st["ai_context"] = None
         st["addressee"] = None
         set_user_state(chat_id, st)
-        await message.answer("Как напишем поздравление?", reply_markup=build_text_mode_keyboard())
+        await message.answer("Как напишем поздравление - с помощью ИИ или свой текст? Нажмите кнопку внизу экрана 👇🏻", reply_markup=build_text_mode_keyboard())
 
     @dp.message(F.text.in_(["✨ Сгенерировать ИИ", "✏️ Написать свой текст"]))
     async def choose_text_mode(message: types.Message):

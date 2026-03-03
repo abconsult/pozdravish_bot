@@ -254,7 +254,7 @@ def _fit_font_and_wrap(
     max_height = int(height * 0.48)
 
     for size in range(start_size, min_size - 1, -2):
-        font = _load_font(primary_font_path, fallback_path, size)
+        font = _load_font(primary_font_path, fallback_font_path, size)
         wrapped = wrap_text(text, font, max_width, draw)
         bbox = draw.textbbox((0, 0), wrapped, font=font, align="center")
         text_w = bbox[2] - bbox[0]
@@ -389,11 +389,11 @@ async def generate_postcard(
             f"&output=image"
         )
 
-        timeout_img = aiohttp.ClientTimeout(total=3)
+        timeout_img = aiohttp.ClientTimeout(total=8)
 
         async def fetch_image() -> bytes:
             async with aiohttp.ClientSession(timeout=timeout_img) as session:
-                resp = await fetch_with_retry(image_url, session, retries=2, delay=1)
+                resp = await fetch_with_retry(image_url, session, retries=1, delay=0)
                 return await resp.read()
 
         if text_mode == "ai":

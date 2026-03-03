@@ -91,36 +91,34 @@ async def get_greeting_text_from_protalk(
         "Ответь ТОЛЬКО текстом поздравления, без кавычек и пояснений."
     )
 
-    protalk_url = (
-        "https://api.pro-talk.ru/api/v1.0/run_function_get"
-        f"?function_id={PROTALK_FUNCTION_ID}"
-        f"&bot_id={PROTALK_BOT_ID}"
-        f"&bot_token={PROTALK_TOKEN}"
-        f"&prompt={urllib.parse.quote(base_prompt)}"
-        f"&output=text"
-    )
+    payload = {
+        "bot_id": int(PROTALK_BOT_ID),
+        "chat_id": f"postcard_text_{addressee}_{occasion}",
+        "message": base_prompt,
+    }
 
     logger.info(f"PROTALK TEXT: calling for '{addressee}' / '{occasion}'")
     try:
         timeout = aiohttp.ClientTimeout(total=4)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            resp = await fetch_with_retry(protalk_url, session, retries=1, delay=0)
-            raw = await resp.text()
+            async with session.post(
+                f"https://api.pro-talk.ru/api/v1.0/ask/{PROTALK_TOKEN}",
+                json=payload,
+            ) as resp:
+                if resp.status != 200:
+                    logger.warning(f"PROTALK TEXT: status {resp.status}")
+                    return fallback
+                raw = await resp.text()
 
         logger.info(f"PROTALK TEXT: raw='{raw[:200]}'")
 
         try:
             result = json.loads(raw)
-            text = (
-                (result.get("result") if isinstance(result, dict) else None)
-                or (result.get("text") if isinstance(result, dict) else None)
-                or (result.get("response") if isinstance(result, dict) else None)
-                or (result if isinstance(result, str) else "")
-            )
-        except json.JSONDecodeError:
-            text = raw
+            text = result.get("done", "").strip()
+        except (json.JSONDecodeError, AttributeError):
+            text = ""
 
-        final = (text or "").strip() or fallback
+        final = text or fallback
         logger.info(f"PROTALK TEXT: result='{final[:80]}'")
         return final
 
@@ -153,6 +151,62 @@ async def safe_greeting(
     except asyncio.TimeoutError:
         logger.info(f"PROTALK TEXT: timeout {timeout_secs}s — using local fallback")
         return local_fallback
+
+
+async def get_image_from_protalk(
+    image_prompt: str,
+    chat_id_suffix: str,
+) -> bytes:
+    """
+    Request ProTalk bot to generate image via function №609 (z_image).
+    Returns image bytes.
+    """
+    message = (
+        f'Выполни функцию №609 - z_image - с параметрами '
+        f'"prompt": "{image_prompt}", "aspect_ratio": "1:1", '
+        f'и в качестве результата работы функции пришли ссылку на изображение вида "https://image.jpg".'
+    )
+
+    payload = {
+        "bot_id": int(PROTALK_BOT_ID),
+        "chat_id": f"postcard_image_{chat_id_suffix}",
+        "message": message,
+    }
+
+    logger.info(f"PROTALK IMAGE: requesting via function call")
+    timeout = aiohttp.ClientTimeout(total=8)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            f"https://api.pro-talk.ru/api/v1.0/ask/{PROTALK_TOKEN}",
+            json=payload,
+        ) as resp:
+            if resp.status != 200:
+                raise Exception(f"ProTalk API returned {resp.status}")
+            raw = await resp.text()
+
+    logger.info(f"PROTALK IMAGE: raw='{raw[:300]}'")
+
+    try:
+        result = json.loads(raw)
+        response_text = result.get("done", "")
+    except (json.JSONDecodeError, AttributeError):
+        response_text = raw
+
+    # Extract image URL from response
+    import re
+    url_match = re.search(r'https?://[^\s"\')]+\.(jpg|jpeg|png|webp)', response_text, re.IGNORECASE)
+    if not url_match:
+        logger.error(f"PROTALK IMAGE: no image URL found in response")
+        raise Exception("No image URL in ProTalk response")
+
+    image_url = url_match.group(0)
+    logger.info(f"PROTALK IMAGE: extracted URL={image_url}")
+
+    # Download image
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        resp = await fetch_with_retry(image_url, session, retries=1, delay=0)
+        return await resp.read()
 
 
 def format_image_text(name: str, occasion: str = "", is_custom: bool = False) -> str:
@@ -382,25 +436,13 @@ async def generate_postcard(
 
         prompt_template = STYLE_PROMPT_MAP.get(style, STYLE_PROMPT_MAP["Минимализм"])
         image_prompt = prompt_template.format(occasion=occasion_text)
-        image_url = (
-            "https://api.pro-talk.ru/api/v1.0/run_function_get"
-            f"?function_id={PROTALK_FUNCTION_ID}"
-            f"&bot_id={PROTALK_BOT_ID}"
-            f"&bot_token={PROTALK_TOKEN}"
-            f"&prompt={urllib.parse.quote(image_prompt)}"
-            f"&output=image"
-        )
-
-        timeout_img = aiohttp.ClientTimeout(total=8)
-
-        async def fetch_image() -> bytes:
-            async with aiohttp.ClientSession(timeout=timeout_img) as session:
-                resp = await fetch_with_retry(image_url, session, retries=1, delay=0)
-                return await resp.read()
 
         if text_mode == "ai":
             image_bytes, caption_for_db = await asyncio.gather(
-                fetch_image(),
+                get_image_from_protalk(
+                    image_prompt=image_prompt,
+                    chat_id_suffix=f"{chat_id}_{style}_{occasion_text}",
+                ),
                 safe_greeting(
                     addressee=addressee,
                     occasion_text=occasion_text,
@@ -410,7 +452,10 @@ async def generate_postcard(
             )
             logger.info(f"POSTCARD: caption='{caption_for_db[:80]}'")
         else:
-            image_bytes = await fetch_image()
+            image_bytes = await get_image_from_protalk(
+                image_prompt=image_prompt,
+                chat_id_suffix=f"{chat_id}_{style}_{occasion_text}",
+            )
             caption_for_db = text_input.strip()
 
         text_to_draw = format_image_text(addressee, occasion_text, is_custom)

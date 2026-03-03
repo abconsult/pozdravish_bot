@@ -159,7 +159,7 @@ async def get_image_from_kie(
 ) -> bytes:
     """
     Generate image via Kie.ai Flux Kontext Pro API.
-    Creates task, polls status once after 5 seconds, downloads result.
+    Creates task, polls status once after 9 seconds, downloads result.
     """
     headers = {
         "Authorization": f"Bearer {KIE_API_KEY}",
@@ -197,8 +197,8 @@ async def get_image_from_kie(
     
     logger.info(f"KIE IMAGE: task created, taskId={task_id}")
     
-    # Step 2: Poll task status (1 attempt after 5 seconds)
-    await asyncio.sleep(5)
+    # Step 2: Poll task status (1 attempt after 9 seconds)
+    await asyncio.sleep(9)
     logger.info(f"KIE IMAGE: polling status")
     
     try:
@@ -228,11 +228,17 @@ async def get_image_from_kie(
         logger.error(f"KIE IMAGE: invalid response format: {status_result}")
         raise Exception("Invalid response format from Kie.ai")
     
-    state = status_result.get("data", {}).get("state")
+    # Handle case when data is null (image not ready yet)
+    data = status_result.get("data")
+    if data is None:
+        logger.error(f"KIE IMAGE: data is null, image not ready after 9 seconds")
+        raise Exception("Image generation timeout (9 seconds)")
+    
+    state = data.get("state")
     logger.info(f"KIE IMAGE: state={state}")
     
     if state == "success":
-        result_json = status_result.get("data", {}).get("resultJson", {})
+        result_json = data.get("resultJson", {})
         result_urls = result_json.get("resultUrls", [])
         
         if not result_urls:
@@ -248,13 +254,13 @@ async def get_image_from_kie(
             return await resp.read()
     
     elif state == "fail":
-        error_msg = status_result.get("data", {}).get("errorMessage", "Unknown error")
+        error_msg = data.get("errorMessage", "Unknown error")
         logger.error(f"KIE IMAGE: generation failed: {error_msg}")
         raise Exception(f"Image generation failed: {error_msg}")
     
-    # Timeout - image not ready after 5 seconds
-    logger.error(f"KIE IMAGE: timeout after 5 seconds, state={state}")
-    raise Exception("Image generation timeout (5 seconds)")
+    # Timeout - image not ready after 9 seconds
+    logger.error(f"KIE IMAGE: timeout after 9 seconds, state={state}")
+    raise Exception("Image generation timeout (9 seconds)")
 
 
 def format_image_text(name: str, occasion: str = "", is_custom: bool = False) -> str:
